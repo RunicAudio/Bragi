@@ -49,4 +49,4 @@ If Windows Defender SmartScreen presents a warning dialog:
 
 ### 💬 Feedback & Issue Reporting
 
-Encounter an issue or have a feature request for the next build? Please submit a ticket via our [GitHub Issues Page](https://github.com/coding-with-arty/FretboardTrainer/issues).
+Encounter an issue or have a feature request for the next build? Please submit a ticket via our [GitHub Issues Page](https://github.com/RunicAudio/FretboardTrainer/issues).
