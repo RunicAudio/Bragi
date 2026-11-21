@@ -1,22 +1,26 @@
 """
 src/ui/components/modals/timing_modal.py
 ========================================
-Modal dialog for configuring pitch hold duration and auto-advance delay.
+Modal dialog for configuring pitch hold duration directly bound to AppState.
 """
 
 import flet as ft
+from core.app_state import AppState
 
 
 class TimingModal(ft.AlertDialog):
     """Modal dialog managing timing and practice pace preferences."""
 
     def __init__(self) -> None:
+        self.app_state = AppState.get_instance()
+
         self.slider_speed = ft.Slider(
             min=0.2,
             max=2.0,
             divisions=18,
-            value=0.8,
+            value=self.app_state.hold_duration_sec,
             label="{value}s Hold",
+            on_change=self._on_slider_changed,
         )
 
         super().__init__(
@@ -30,7 +34,11 @@ class TimingModal(ft.AlertDialog):
             content=ft.Container(
                 content=ft.Column(
                     controls=[
-                        ft.Text("In-Tune Hold Duration (Seconds):", size=13, color=ft.Colors.with_opacity(0.7, ft.Colors.WHITE)),
+                        ft.Text(
+                            "In-Tune Hold Duration (Seconds):",
+                            size=13,
+                            color=ft.Colors.with_opacity(0.7, ft.Colors.WHITE),
+                        ),
                         self.slider_speed,
                     ],
                     tight=True,
@@ -44,6 +52,10 @@ class TimingModal(ft.AlertDialog):
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
+
+    def _on_slider_changed(self, e: ft.ControlEvent) -> None:
+        val = float(e.control.value)
+        self.app_state.set_hold_duration(val)
 
     def _close(self, e: ft.ControlEvent) -> None:
         target_page = e.page or self.page

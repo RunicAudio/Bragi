@@ -1,7 +1,8 @@
 """
 src/ui/views/trainer_view.py
 ============================
-Trainer subview driving Single Note, Strummed Chord, and Arpeggio Chord practice.
+Trainer subview driving Single Note, Strummed Chord, and Arpeggio Chord practice
+with polyphonic detection, accurate timing hold evaluation, and gamification dispatch.
 """
 
 import random
@@ -26,10 +27,11 @@ class TrainerView(ft.Container):
         self.audio_engine = AudioEngine.get_instance()
 
         self.last_advance_time = 0.0
-        self.streak_count = 0
+        self.in_tune_start_time: float = 0.0
 
         self.txt_mode = ft.Text("", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_400)
-        self.txt_streak = ft.Text("Streak: 0", size=14, color=ft.Colors.AMBER_400)
+        self.txt_xp = ft.Text(f"XP: {self.app_state.user_profile.total_xp} (Lvl {self.app_state.user_profile.user_level})", size=14, color=ft.Colors.GREEN_400)
+        self.txt_streak = ft.Text(f"Streak: {self.app_state.user_profile.current_streak}", size=14, color=ft.Colors.AMBER_400)
         self.txt_target = ft.Text("", size=32, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE)
         self.txt_subtitle = ft.Text("", size=16, color=ft.Colors.with_opacity(0.7, ft.Colors.WHITE))
         self.txt_live_note = ft.Text("--", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.RED_400)
@@ -50,7 +52,7 @@ class TrainerView(ft.Container):
                 color=ft.Colors.with_opacity(0.7, ft.Colors.WHITE),
                 shape=ft.RoundedRectangleBorder(radius=10),
             ),
-            on_click=lambda _: self._advance_target(),
+            on_click=lambda _: self._skip_target(),
         )
 
         self.content = self._build_layout()
@@ -58,6 +60,7 @@ class TrainerView(ft.Container):
 
         self.app_state.subscribe_view(self._on_view_changed)
         self.app_state.subscribe_pitch(self._on_pitch_changed)
+        self.app_state.subscribe_gamification(self._on_gamification_changed)
 
     def _build_layout(self) -> ft.Control:
         return ft.Column(
@@ -65,8 +68,7 @@ class TrainerView(ft.Container):
                 ft.Row(
                     controls=[
                         self.txt_mode,
-                        ft.Container(expand=True),
-                        self.txt_streak,
+                        ft.Row(controls=[self.txt_xp, self.txt_streak], spacing=16),
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 ),
@@ -106,7 +108,8 @@ class TrainerView(ft.Container):
     def _update_target_display(self) -> None:
         mode = self.app_state.trainer_mode
         self.txt_mode.value = f"MODE: {mode.value.replace('_', ' ')}"
-        self.txt_streak.value = f"Streak: {self.streak_count}"
+        self.txt_streak.value = f"Streak: {self.app_state.user_profile.current_streak}"
+        self.txt_xp.value = f"XP: {self.app_state.user_profile.total_xp} (Lvl {self.app_state.user_profile.user_level})"
 
         if mode == TrainerSubMode.SINGLE_NOTE:
             self.txt_target.value = f"Play Note: {self.app_state.target_note_name}"
@@ -133,7 +136,7 @@ class TrainerView(ft.Container):
 
     def _evaluate_auto_advance(self) -> None:
         now = time.time()
-        if (now - self.last_advance_time) < 0.8:
+        if (now - self.last_advance_time) < 0.5:
             return
 
         mode = self.app_state.trainer_mode
@@ -142,22 +145,49 @@ class TrainerView(ft.Container):
         if mode == TrainerSubMode.SINGLE_NOTE:
             live = self.app_state.live_pitch
             if not live.is_silent and live.note_name == self.app_state.target_note_name and live.is_in_tune:
-                matched = True
+                if self.in_tune_start_time == 0.0:
+                    self.in_tune_start_time = now
+                elif (now - self.in_tune_start_time) >= self.app_state.hold_duration_sec:
+                    matched = True
+            else:
+                self.in_tune_start_time = 0.0
+
         elif mode == TrainerSubMode.STRUMMED_CHORD:
-            live = self.app_state.live_pitch
+            # Uses true polyphonic chromagram pitch classes
+            strum_pcs = self.audio_engine.get_active_strum_pcs()
             target_pcs = self.app_state.target_chord_pcs
-            if not live.is_silent and (MusicTheory.note_to_pitch_class(live.note_name) in target_pcs):
+            if target_pcs and target_pcs.issubset(strum_pcs):
                 matched = True
+
         elif mode == TrainerSubMode.ARPEGGIO_CHORD:
+            # Uses time-windowed (2.5s) accumulated pitch classes
             acc_pcs = self.audio_engine.get_accumulated_arpeggio_pcs()
-            if self.app_state.target_chord_pcs.issubset(acc_pcs):
+            target_pcs = self.app_state.target_chord_pcs
+            if target_pcs and target_pcs.issubset(acc_pcs):
                 matched = True
 
         if matched:
             self.last_advance_time = now
-            self.streak_count += 1
+            self.in_tune_start_time = 0.0
+
+            target_name = (
+                self.app_state.target_note_name
+                if mode == TrainerSubMode.SINGLE_NOTE
+                else self.app_state.target_chord_name
+            )
+            self.app_state.record_attempt(is_correct=True, target_name=target_name)
             self.audio_engine.clear_arpeggio_buffer()
             self._advance_target()
+
+    def _skip_target(self) -> None:
+        target_name = (
+            self.app_state.target_note_name
+            if self.app_state.trainer_mode == TrainerSubMode.SINGLE_NOTE
+            else self.app_state.target_chord_name
+        )
+        self.app_state.record_attempt(is_correct=False, target_name=target_name)
+        self.audio_engine.clear_arpeggio_buffer()
+        self._advance_target()
 
     def _advance_target(self) -> None:
         mode = self.app_state.trainer_mode
@@ -186,6 +216,14 @@ class TrainerView(ft.Container):
                 target_page.dialog = modal
                 modal.open = True
                 target_page.update()
+
+    def _on_gamification_changed(self) -> None:
+        if self.page is not None:
+            try:
+                self._update_target_display()
+                self.update()
+            except Exception:
+                pass
 
     def _on_view_changed(self) -> None:
         if self.page is not None and self.app_state.current_view == ActiveViewMode.TRAINER:

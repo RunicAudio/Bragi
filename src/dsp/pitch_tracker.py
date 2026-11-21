@@ -1,12 +1,17 @@
 """
 src/dsp/pitch_tracker.py
 ========================
-High-accuracy real-time fundamental frequency (F0) tracking using autocorrelation and peak detection.
+High-accuracy real-time fundamental frequency (F0) tracking using autocorrelation,
+peak detection, and quadratic/parabolic sub-sample lag interpolation.
 """
 
 import numpy as np
 from core.app_state import LivePitch
-from domain.music_theory import MusicTheory
+from domain.music_theory import CHROMATIC_SHARPS, MusicTheory
+
+# Acoustic Reference Constants required by Chromagram analyzer
+A440_HZ = 440.0
+NOTE_NAMES_12 = CHROMATIC_SHARPS
 
 
 class PitchTracker:
@@ -24,31 +29,52 @@ class PitchTracker:
 
     def process_frame(self, signal: np.ndarray) -> LivePitch:
         """Processes a PCM audio buffer frame and computes pitch parameters."""
-        rms = np.sqrt(np.mean(signal**2))
-        if rms < 0.01:
-            return LivePitch(is_silent=True)
+        rms = float(np.sqrt(np.mean(signal**2)))
+
+        # Lowered noise threshold to detect mic input
+        if rms < 0.0005:
+            return LivePitch(is_silent=True, rms_level=rms)
 
         n = len(signal)
-        if n < self.max_period * 2:
-            return LivePitch(is_silent=True)
+        if n < self.max_period + 10:
+            return LivePitch(is_silent=True, rms_level=rms)
 
         r = np.correlate(signal, signal, mode="full")[n - 1 :]
         if r[0] == 0:
-            return LivePitch(is_silent=True)
+            return LivePitch(is_silent=True, rms_level=rms)
 
         r_norm = r / r[0]
 
         search_region = r_norm[self.min_period : self.max_period]
         if len(search_region) == 0:
-            return LivePitch(is_silent=True)
+            return LivePitch(is_silent=True, rms_level=rms)
 
-        peak_idx = np.argmax(search_region) + self.min_period
-        peak_val = r_norm[peak_idx]
+        peak_idx_rel = int(np.argmax(search_region))
+        peak_idx = peak_idx_rel + self.min_period
+        peak_val = search_region[peak_idx_rel]
 
-        if peak_val < 0.4:
-            return LivePitch(is_silent=True)
+        if peak_val < 0.25:
+            return LivePitch(is_silent=True, rms_level=rms)
 
-        freq = self.sample_rate / peak_idx
+        # Quadratic / Parabolic Interpolation around peak
+        if 0 < peak_idx_rel < len(search_region) - 1:
+            alpha = float(search_region[peak_idx_rel - 1])
+            beta = float(search_region[peak_idx_rel])
+            gamma = float(search_region[peak_idx_rel + 1])
+
+            denom = 2.0 * (2.0 * beta - alpha - gamma)
+            if abs(denom) > 1e-6:
+                delta = (gamma - alpha) / denom
+            else:
+                delta = 0.0
+            refined_lag = float(peak_idx) + delta
+        else:
+            refined_lag = float(peak_idx)
+
+        if refined_lag <= 0:
+            return LivePitch(is_silent=True, rms_level=rms)
+
+        freq = float(self.sample_rate) / refined_lag
         note_name, pitch_class, cents = MusicTheory.frequency_to_note_info(freq)
         is_in_tune = abs(cents) <= 10.0
 
@@ -59,4 +85,5 @@ class PitchTracker:
             cents_deviation=float(cents),
             is_in_tune=is_in_tune,
             is_silent=False,
+            rms_level=rms,
         )

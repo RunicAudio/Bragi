@@ -1,23 +1,27 @@
 """
 src/dsp/sample_player.py
 ========================
-Low-latency polyphonic sound generator synthesizing organic piano/e-piano Tones
-with smooth ADSR envelopes to prevent audio clipping or harsh harmonic distortion.
+Thread-safe low-latency polyphonic sound generator synthesizing organic piano tones
+with exponential ADSR envelopes and stream locking to prevent PortAudio concurrency crashes.
 """
 
 import threading
 import numpy as np
 import sounddevice as sd
 
+from domain.music_theory import MusicTheory
+
 
 class SamplePlayer:
-    """Synthesizes high-fidelity piano tones with exponential decay envelopes."""
+    """Synthesizes smooth piano tones with thread-safe sounddevice audio playback."""
+
+    _audio_lock = threading.Lock()
 
     def __init__(self, sample_rate: int = 44100) -> None:
         self.sample_rate = sample_rate
 
     def play_pitch_classes(self, pitch_classes: set[int], base_octave: int = 4, duration_sec: float = 1.2) -> None:
-        """Asynchronously plays a chord or interval combination of pitch classes."""
+        """Asynchronously plays a chord or interval combination of pitch classes safely."""
         threading.Thread(
             target=self._render_and_play,
             args=(list(pitch_classes), base_octave, duration_sec),
@@ -26,9 +30,9 @@ class SamplePlayer:
 
     def play_note(self, note_name: str, octave: int = 4, duration_sec: float = 1.0) -> None:
         """Asynchronously plays a single note."""
-        from domain.music_theory import MusicTheory
         pc = MusicTheory.note_to_pitch_class(note_name)
-        self.play_pitch_classes({pc}, base_octave=octave, duration_sec=duration_sec)
+        if pc >= 0:
+            self.play_pitch_classes({pc}, base_octave=octave, duration_sec=duration_sec)
 
     def _render_and_play(self, pitch_classes: list[int], octave: int, duration_sec: float) -> None:
         if not pitch_classes:
@@ -56,13 +60,15 @@ class SamplePlayer:
 
             mixed_signal += tone * envelope
 
-        # Normalize total power to prevent digital clipping / distortion
+        # Normalize total power to prevent digital clipping
         max_val = np.max(np.abs(mixed_signal))
         if max_val > 0.001:
             mixed_signal = (mixed_signal / max_val) * 0.70
 
-        try:
-            sd.play(mixed_signal.astype(np.float32), samplerate=self.sample_rate)
-            sd.wait()
-        except Exception as err:
-            print(f"[SamplePlayer] Audio playback error: {err}")
+        # Thread-safe playback stream execution
+        with SamplePlayer._audio_lock:
+            try:
+                sd.play(mixed_signal.astype(np.float32), samplerate=self.sample_rate)
+                sd.wait()
+            except Exception as err:
+                print(f"[SamplePlayer] Audio playback error: {err}")

@@ -1,8 +1,8 @@
 """
 src/main.py
 ===========
-Application entry point launching Flet UI, initializing Central DSP,
-and managing application lifecycle hooks.
+Application entry point launching Flet UI via ft.run(),
+initializing Central DSP, and managing thread-safe lifecycle hooks.
 """
 
 from pathlib import Path

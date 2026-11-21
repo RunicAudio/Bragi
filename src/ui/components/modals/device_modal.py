@@ -1,78 +1,115 @@
 """
 src/ui/components/modals/device_modal.py
 ========================================
-Modal dialog for selecting active microphone input hardware.
+Modal dialog for selecting audio input device with a live signal test meter.
 """
 
 import flet as ft
+from core.app_state import AppState
 from dsp.audio_engine import AudioEngine
 
 
 class DeviceModal(ft.AlertDialog):
-    """Modal popup dialog allowing users to pick an active audio input device."""
+    """Modal popup dialog for selecting audio input device and testing mic input."""
 
     def __init__(self) -> None:
         self.audio_engine = AudioEngine.get_instance()
-        devices = self.audio_engine.get_input_devices()
+        self.app_state = AppState.get_instance()
 
-        options = [
-            ft.DropdownOption(
-                key=str(dev["id"]),
-                text=f"{dev['name']} ({dev['channels']} in)",
-            )
-            for dev in devices
-        ]
+        self.pb_level = ft.ProgressBar(value=0.0, width=320, color=ft.Colors.GREEN_400)
+        self.txt_live_status = ft.Text("Live Input: --", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE)
 
-        current_key = (
-            str(self.audio_engine.device_id)
-            if self.audio_engine.device_id is not None
-            else (options[0].key if options else None)
+        self.radio_group = ft.RadioGroup(
+            content=ft.Column(controls=[], spacing=8, scroll=ft.ScrollMode.AUTO),
+            on_change=self._on_radio_changed,
         )
 
-        self.dd_devices = ft.Dropdown(
-            options=options,
-            value=current_key,
-            width=340,
-            on_select=self._on_device_selected,
-        )
+        self._populate_devices()
 
         super().__init__(
             title=ft.Row(
                 controls=[
                     ft.Icon(ft.Icons.MIC, color=ft.Colors.AMBER_300),
-                    ft.Text("Audio Input Device", weight=ft.FontWeight.BOLD),
+                    ft.Text("Audio Input Setup", weight=ft.FontWeight.BOLD),
                 ],
                 spacing=8,
             ),
             content=ft.Container(
                 content=ft.Column(
                     controls=[
-                        ft.Text(
-                            "Select Microphone / Input Source:",
-                            size=13,
-                            color=ft.Colors.with_opacity(0.7, ft.Colors.WHITE),
+                        ft.Text("Select Active Input Source:", size=13, color=ft.Colors.with_opacity(0.7, ft.Colors.WHITE)),
+                        ft.Container(
+                            content=self.radio_group,
+                            height=180,
+                            border=ft.Border.all(1, ft.Colors.with_opacity(0.2, ft.Colors.WHITE)),
+                            border_radius=8,
+                            padding=8,
                         ),
-                        self.dd_devices if options else ft.Text("No input audio devices detected.", color=ft.Colors.RED_400),
+                        ft.Divider(height=16, color=ft.Colors.with_opacity(0.2, ft.Colors.WHITE)),
+                        ft.Text("Live Input Test:", size=13, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_300),
+                        self.pb_level,
+                        self.txt_live_status,
                     ],
                     tight=True,
-                    spacing=12,
+                    spacing=10,
                 ),
                 width=380,
                 padding=12,
             ),
             actions=[
-                ft.Button(content=ft.Text("Close"), on_click=lambda e: self._close(e)),
+                ft.Button(content=ft.Text("Refresh List"), on_click=lambda e: self._refresh_devices(e)),
+                ft.Button(content=ft.Text("Done"), on_click=lambda e: self._close(e)),
             ],
-            actions_alignment=ft.MainAxisAlignment.END,
+            actions_alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         )
 
-    def _on_device_selected(self, e: ft.ControlEvent) -> None:
-        val = e.control.value or e.data
-        if val:
+        self.app_state.subscribe_pitch(self._on_pitch_update)
+
+    def _populate_devices(self) -> None:
+        devices = self.audio_engine.get_input_devices()
+        current_id = self.audio_engine.device_id if self.audio_engine.device_id is not None else -1
+
+        radios = []
+        for dev in devices:
+            dev_id = dev["id"]
+            label = f"{dev['name']} ({dev['channels']} ch)"
+            radios.append(ft.Radio(value=str(dev_id), label=label))
+
+        self.radio_group.content.controls = radios
+        self.radio_group.value = str(current_id if any(str(dev["id"]) == str(current_id) for dev in devices) else devices[0]["id"])
+
+    def _on_radio_changed(self, e: ft.ControlEvent) -> None:
+        val = e.control.value
+        if val is not None:
             try:
                 dev_id = int(val)
                 self.audio_engine.set_device(dev_id)
             except ValueError:
+                pass
+
+    def _refresh_devices(self, e: ft.ControlEvent) -> None:
+        self._populate_devices()
+        self.audio_engine.stop()
+        self.audio_engine.start()
+        if self.page:
+            self.update()
+
+    def _on_pitch_update(self) -> None:
+        live = self.app_state.live_pitch
+        level = min(1.0, live.rms_level * 30.0)
+        self.pb_level.value = level
+
+        if live.is_silent or live.note_name == "--":
+            self.txt_live_status.value = f"Signal Level: {int(level * 100)}% (Listening...)"
+            self.txt_live_status.color = ft.Colors.WHITE
+        else:
+            self.txt_live_status.value = f"Detected: {live.note_name} ({live.cents_deviation:+.1f}c)"
+            self.txt_live_status.color = ft.Colors.GREEN_400
+
+        if self.page:
+            try:
+                self.update()
+            except Exception:
                 pass
 
     def _close(self, e: ft.ControlEvent) -> None:
