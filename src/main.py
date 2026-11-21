@@ -57,6 +57,7 @@ def main(page: ft.Page) -> None:
 
     # Start audio stream
     audio_engine = AudioEngine.get_instance()
+    audio_engine.set_ui_page(page)
     audio_engine.start()
 
     # Shutdown handlers to prevent background thread crashes on exit

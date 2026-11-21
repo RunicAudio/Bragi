@@ -59,20 +59,27 @@ class AppShell(ft.Stack):
                 pass
 
     def _open_modal(self, modal: ft.AlertDialog, e: ft.ControlEvent = None) -> None:
-        target_page = (e.page if e else None) or self.app_page or self.page
+        target_page = (e.page if e else None) or self.app_page
+
         if target_page is not None:
-            if hasattr(target_page, "open"):
-                target_page.open(modal)
-            else:
-                target_page.dialog = modal
-                modal.open = True
-                target_page.update()
+            target_page.show_dialog(modal)
 
     def _open_filter_modal(self, e: ft.ControlEvent) -> None:
         self._open_modal(FilterModal(), e)
 
     def _open_device_modal(self, e: ft.ControlEvent) -> None:
-        self._open_modal(DeviceModal(), e)
+        print("[UI DEBUG] Microphone callback fired")
+
+        try:
+            modal = DeviceModal()
+            print("[UI DEBUG] DeviceModal constructed successfully")
+
+            self._open_modal(modal, e)
+            print("[UI DEBUG] Modal open request sent")
+
+        except Exception:
+            import traceback
+            traceback.print_exc()
 
     def _open_timing_modal(self, e: ft.ControlEvent) -> None:
         self._open_modal(TimingModal(), e)

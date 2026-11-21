@@ -7,6 +7,8 @@ and time-windowed arpeggio accumulation.
 """
 
 import time
+import queue
+import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 import sounddevice as sd
@@ -34,13 +36,37 @@ class AudioEngine:
 
         self.stream: Optional[sd.InputStream] = None
 
-        try:
-            default_in = sd.default.device[0]
-            self.device_id: Optional[int] = int(default_in) if (default_in is not None and default_in >= 0) else None
-        except Exception:
-            self.device_id = None
+        self.device_id = self._find_preferred_input_device()
+
+        if self.device_id is None:
+            try:
+                default_in = sd.default.device[0]
+                self.device_id = (
+                    int(default_in)
+                    if default_in is not None and default_in >= 0
+                    else None
+                )
+                print(
+                    f"[AudioEngine] HeadRush WASAPI not found. "
+                    f"Using system default input: {self.device_id}"
+                )
+            except Exception:
+                self.device_id = None
+        else:
+            print(
+                f"[AudioEngine] Preferred HeadRush input found: "
+                f"device {self.device_id}"
+            )
 
         self.is_running = False
+
+        # Background DSP worker infrastructure
+        self._audio_queue = queue.Queue(maxsize=4)
+        self._dsp_thread: Optional[threading.Thread] = None
+        self._dsp_stop_event = threading.Event()
+        self._analysis_lock = threading.Lock()
+
+        self._ui_page = None
 
         self._arpeggio_history: List[Tuple[int, float]] = []
         self._last_ui_notify_time = 0.0
@@ -52,30 +78,101 @@ class AudioEngine:
             cls._instance = cls()
         return cls._instance
 
-    def get_input_devices(self) -> List[Dict[str, Any]]:
-        """Queries and returns all available audio input hardware devices."""
-        input_devs = []
+    @staticmethod
+    def _find_preferred_input_device() -> Optional[int]:
+        """Find the HeadRush Core Line 1/2 input using Windows WASAPI."""
+
         try:
             devices = sd.query_devices()
-            for idx, dev in enumerate(devices):
-                if dev.get("max_input_channels", 0) > 0:
+
+            for idx, device in enumerate(devices):
+                name = device.get("name", "")
+
+                if (
+                    "HeadRush Core" not in name
+                    or "Line 1/2" not in name
+                    or device.get("max_input_channels", 0) < 1
+                ):
+                    continue
+
+                host_api = sd.query_hostapis(device["hostapi"])["name"]
+
+                if "WASAPI" in host_api:
+                    return idx
+
+        except Exception as error:
+            print(
+                f"[AudioEngine] Preferred device detection failed: {error}"
+            )
+
+        return None
+
+    def get_input_devices(self) -> List[Dict[str, Any]]:
+        """Return primary audio inputs without duplicate host API entries."""
+
+        input_devs = []
+
+        try:
+            devices = sd.query_devices()
+            host_apis = sd.query_hostapis()
+
+            preferred_devices = [
+                # All HeadRush input configurations
+                ("HeadRush Core", "Line 1/2", "Windows WASAPI"),
+                ("HeadRush Core", "Line 3/4", "Windows WASAPI"),
+                ("HeadRush Core", "Line 5/6", "Windows WASAPI"),
+                ("HeadRush Core", "Multichannel", "Windows WASAPI"),
+
+                # Other useful inputs
+                ("Intel", "Microphone Array", "Windows WASAPI"),
+                ("Voicemeeter", "Out B1", "Windows WASAPI"),
+                ("Realtek", "Microphone", "Windows WDM-KS"),
+            ]
+
+            for manufacturer, endpoint, preferred_api in preferred_devices:
+                for idx, dev in enumerate(devices):
+
+                    if dev.get("max_input_channels", 0) <= 0:
+                        continue
+
+                    name = dev.get("name", "")
+                    host_api = host_apis[dev["hostapi"]]["name"]
+
+                    if manufacturer.lower() not in name.lower():
+                        continue
+
+                    if endpoint.lower() not in name.lower():
+                        continue
+
+                    if host_api != preferred_api:
+                        continue
+
                     input_devs.append({
                         "id": idx,
-                        "name": dev.get("name", f"Input Device #{idx}"),
-                        "channels": dev.get("max_input_channels", 1),
-                        "default_samplerate": dev.get("default_samplerate", 44100),
+                        "name": name,
+                        "channels": dev["max_input_channels"],
+                        "default_samplerate": dev["default_samplerate"],
+                        "host_api": host_api,
                     })
+
+                    break
+
         except Exception as e:
             print(f"[AudioEngine] Failed to query audio devices: {e}")
 
-        if not input_devs:
-            input_devs.append({
-                "id": -1,
-                "name": "Default System Microphone",
-                "channels": 1,
-                "default_samplerate": 44100,
-            })
+        print(f"[AudioEngine] Found {len(input_devs)} primary input devices.")
+
+        for dev in input_devs:
+            print(
+                f"[AudioEngine] {dev['id']}: "
+                f"{dev['name']} ({dev['channels']} channels)"
+            )
+
         return input_devs
+
+    def set_ui_page(self, page) -> None:
+        """Registers the Flet page for thread-safe UI dispatch."""
+        self._ui_page = page
 
     def set_device(self, device_id: int) -> None:
         """Switches microphone input source to target hardware device ID."""
@@ -99,7 +196,7 @@ class AudioEngine:
             native_sr = int(dev_info.get("default_samplerate", 44100))
             if native_sr > 0:
                 self.sample_rate = native_sr
-                self.pitch_tracker.sample_rate = native_sr
+                self.pitch_tracker.set_sample_rate(native_sr)
                 self.chroma_analyzer.sample_rate = native_sr
         except Exception as e:
             print(f"[AudioEngine] Query device info warning: {e}")
@@ -146,42 +243,92 @@ class AudioEngine:
             self.stream = None
 
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
+        """Capture audio and enqueue it for background DSP processing."""
         if not self.is_running:
             return
 
-        audio_samples = indata[:, 0]
-        n_samples = len(audio_samples)
+        try:
+            audio_samples = indata[:, 0].copy()
 
-        # Accumulate in 4096-sample rolling buffer
-        if n_samples > 0:
-            if n_samples >= 4096:
-                self._pcm_buffer = audio_samples[-4096:].astype(np.float32)
-            else:
-                self._pcm_buffer = np.roll(self._pcm_buffer, -n_samples)
-                self._pcm_buffer[-n_samples:] = audio_samples.astype(np.float32)
+            try:
+                self._audio_queue.put_nowait(audio_samples)
+            except queue.Full:
+                # Discard the oldest block to prioritize recent audio.
+                try:
+                    self._audio_queue.get_nowait()
+                except queue.Empty:
+                    pass
 
-        now = time.time()
+                try:
+                    self._audio_queue.put_nowait(audio_samples)
+                except queue.Full:
+                    pass
 
-        # 1. Monophonic Fundamental Tracking
-        live_pitch = self.pitch_tracker.process_frame(self._pcm_buffer)
+        except Exception as e:
+            print(f"[AudioEngine] Audio callback error: {e}")
 
-        # 2. Polyphonic Chromagram Extraction
-        active_strum_pcs, chroma_vec = self.chroma_analyzer.process_frame(self._pcm_buffer)
-        self._active_strum_pcs = active_strum_pcs
+    def _process_audio_queue(self) -> None:
+        """Process queued audio independently of the PortAudio callback."""
 
-        # 3. Time-windowed Arpeggio Accumulation
-        if not live_pitch.is_silent and live_pitch.is_in_tune:
-            pc = live_pitch.pitch_class
-            if pc >= 0:
-                self._arpeggio_history.append((pc, now))
+        while not self._dsp_stop_event.is_set() or not self._audio_queue.empty():
+            try:
+                audio_samples = self._audio_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
 
-        # Purge arpeggio history entries older than 2.5 seconds
-        self._arpeggio_history = [(pc, t) for pc, t in self._arpeggio_history if (now - t) <= 2.5]
+            try:
+                n_samples = len(audio_samples)
 
-        # 4. Throttled UI State Dispatch
-        if (now - self._last_ui_notify_time) >= 0.05:
-            self._last_ui_notify_time = now
-            self.app_state.update_live_pitch(live_pitch)
+                # Maintain the rolling 4096-sample analysis buffer.
+                if n_samples >= 4096:
+                    self._pcm_buffer = audio_samples[-4096:].astype(np.float32)
+                elif n_samples > 0:
+                    self._pcm_buffer = np.roll(self._pcm_buffer, -n_samples)
+                    self._pcm_buffer[-n_samples:] = audio_samples
+
+                now = time.time()
+
+                #Monophonic fundamental tracking.
+                live_pitch = self.pitch_tracker.process_frame(self._pcm_buffer)
+
+                # Polyphonic chromagram extraction.
+                active_strum_pcs, chroma_vec = self.chroma_analyzer.process_frame(
+                    self._pcm_buffer
+                )
+
+                # Update shared chord-detection state.
+                with self._analysis_lock:
+                    self._active_strum_pcs = active_strum_pcs
+
+                    if not live_pitch.is_silent and live_pitch.is_in_tune:
+                        pc = live_pitch.pitch_class
+                        if pc >= 0:
+                            self._arpeggio_history.append((pc, now))
+
+                    self._arpeggio_history = [
+                        (pc, timestamp)
+                        for pc, timestamp in self._arpeggio_history
+                        if now - timestamp <= 2.5
+                    ]
+
+                # Throttle pitch notifications to approximately 20 Hz.
+                if now - self._last_ui_notify_time >= 0.05:
+                    self._last_ui_notify_time = now
+
+                    page = self._ui_page
+                    if page is not None:
+                        try:
+                            page.run_task(self._publish_live_pitch, live_pitch)
+                        except Exception as e:
+                            print(f"[AudioEngine] UI dispatch error: {e}")
+
+            except Exception as e:
+                print(f"[AudioEngine] DSP worker error: {e}")
+
+
+    async def _publish_live_pitch(self, live_pitch: LivePitch) -> None:
+        """Publish pitch changes through Flet's event loop."""
+    self.app_state.update_live_pitch(live_pitch)
 
     def get_active_strum_pcs(self) -> Set[int]:
         return set(self._active_strum_pcs)

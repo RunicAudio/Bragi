@@ -66,26 +66,47 @@ class DeviceModal(ft.AlertDialog):
         self.app_state.subscribe_pitch(self._on_pitch_update)
 
     def _populate_devices(self) -> None:
+        # Prevent initialization from triggering device changes.
+        self.radio_group.on_change = None
+
         devices = self.audio_engine.get_input_devices()
-        current_id = self.audio_engine.device_id if self.audio_engine.device_id is not None else -1
+        current_id = self.audio_engine.device_id
 
         radios = []
+
         for dev in devices:
             dev_id = dev["id"]
             label = f"{dev['name']} ({dev['channels']} ch)"
             radios.append(ft.Radio(value=str(dev_id), label=label))
 
         self.radio_group.content.controls = radios
-        self.radio_group.value = str(current_id if any(str(dev["id"]) == str(current_id) for dev in devices) else devices[0]["id"])
+
+        available_ids = {dev["id"] for dev in devices}
+
+        if current_id in available_ids:
+            self.radio_group.value = str(current_id)
+        elif devices:
+            self.radio_group.value = str(devices[0]["id"])
+
+        # Enable device switching after initialization.
+        self.radio_group.on_change = self._on_radio_changed
 
     def _on_radio_changed(self, e: ft.ControlEvent) -> None:
         val = e.control.value
-        if val is not None:
-            try:
-                dev_id = int(val)
-                self.audio_engine.set_device(dev_id)
-            except ValueError:
-                pass
+
+        if val is None:
+            return
+
+        try:
+            dev_id = int(val)
+
+            if dev_id == self.audio_engine.device_id:
+                return
+
+            self.audio_engine.set_device(dev_id)
+
+        except (ValueError, TypeError) as exc:
+            print(f"[DeviceModal] Invalid device selection: {exc}")
 
     def _refresh_devices(self, e: ft.ControlEvent) -> None:
         self._populate_devices()
