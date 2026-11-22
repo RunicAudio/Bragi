@@ -186,7 +186,7 @@ class AudioEngine:
         if self.is_running:
             return
 
-        # Query native sample rate of selected device to prevent PortAudioError
+        # Determine the selected device's native sample rate.
         try:
             if self.device_id is not None:
                 dev_info = sd.query_devices(self.device_id, "input")
@@ -194,53 +194,95 @@ class AudioEngine:
                 dev_info = sd.query_devices(kind="input")
 
             native_sr = int(dev_info.get("default_samplerate", 44100))
-            if native_sr > 0:
-                self.sample_rate = native_sr
-                self.pitch_tracker.set_sample_rate(native_sr)
-                self.chroma_analyzer.sample_rate = native_sr
         except Exception as e:
             print(f"[AudioEngine] Query device info warning: {e}")
+            native_sr = self.sample_rate
+
+        # Try native rate first, then the alternate common rate.
+        sample_rates = [native_sr, 48000 if native_sr != 48000 else 44100]
+
+        # Prepare the DSP worker.
+        self._dsp_stop_event.clear()
+
+        while not self._audio_queue.empty():
+            try:
+                self._audio_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        self._pcm_buffer = np.zeros(4096, dtype=np.float32)
+        self._last_ui_notify_time = 0.0
+
+        self._dsp_thread = threading.Thread(
+            target=self._process_audio_queue,
+            name="Bragi-DSP",
+            daemon=True,
+        )
+        self._dsp_thread.start()
 
         self.is_running = True
-        try:
-            self.stream = sd.InputStream(
-                device=self.device_id,
-                samplerate=self.sample_rate,
-                blocksize=self.block_size,
-                channels=1,
-                callback=self._audio_callback,
-            )
-            self.stream.start()
-            print(f"[AudioEngine] Audio stream started on device {self.device_id} @ {self.sample_rate}Hz")
-        except Exception as e:
-            print(f"[AudioEngine] Primary start failed @ {self.sample_rate}Hz: {e}")
-            fallback_sr = 48000 if self.sample_rate != 48000 else 44100
+
+        for sample_rate in sample_rates:
             try:
-                self.sample_rate = fallback_sr
-                self.pitch_tracker.sample_rate = fallback_sr
-                self.chroma_analyzer.sample_rate = fallback_sr
+                self.sample_rate = sample_rate
+                self.pitch_tracker.set_sample_rate(sample_rate)
+                self.chroma_analyzer.sample_rate = sample_rate
+
                 self.stream = sd.InputStream(
                     device=self.device_id,
-                    samplerate=self.sample_rate,
+                    samplerate=sample_rate,
                     blocksize=self.block_size,
                     channels=1,
                     callback=self._audio_callback,
                 )
+
                 self.stream.start()
-                print(f"[AudioEngine] Fallback audio stream started on device {self.device_id} @ {self.sample_rate}Hz")
-            except Exception as err:
-                print(f"[AudioEngine] All audio stream start attempts failed: {err}")
-                self.is_running = False
+
+                print(
+                    f"[AudioEngine] Audio stream started on device "
+                    f"{self.device_id} @ {sample_rate}Hz"
+                )
+                return
+
+            except Exception as e:
+                print(
+                    f"[AudioEngine] Stream start failed @ "
+                    f"{sample_rate}Hz: {e}"
+                )
+
+                if self.stream is not None:
+                    try:
+                        self.stream.close()
+                    except Exception:
+                        pass
+                    self.stream = None
+
+        print("[AudioEngine] All audio stream start attempts failed.")
+        self.stop()
+
 
     def stop(self) -> None:
         self.is_running = False
+
+    # Stop audio capture before shutting down DSP processing.
         if self.stream is not None:
             try:
                 self.stream.stop()
                 self.stream.close()
-            except Exception:
-                pass
-            self.stream = None
+            except Exception as e:
+                print(f"[AudioEngine] Stream shutdown warning: {e}")
+            finally:
+                self.stream = None
+
+        # Allow the worker to finish processing queued audio.
+        self._dsp_stop_event.set()
+
+        if self._dsp_thread is not None:
+            if self._dsp_thread is not threading.current_thread():
+                self._dsp_thread.join(timeout=3.0)
+
+            if not self._dsp_thread.is_alive():
+                self._dsp_thread = None
 
     def _audio_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
         """Capture audio and enqueue it for background DSP processing."""
@@ -291,13 +333,12 @@ class AudioEngine:
                 #Monophonic fundamental tracking.
                 live_pitch = self.pitch_tracker.process_frame(self._pcm_buffer)
 
-                # Polyphonic chromagram extraction.
-                active_strum_pcs, chroma_vec = self.chroma_analyzer.process_frame(
-                    self._pcm_buffer
-                )
-
-                # Update shared chord-detection state.
+                #Update shared chord detection state safely
                 with self._analysis_lock:
+                    active_strum_pcs, chrome_vec = self.chroma_analyzer.process_frame(
+                        self._pcm_buffer
+                    )
+
                     self._active_strum_pcs = active_strum_pcs
 
                     if not live_pitch.is_silent and live_pitch.is_in_tune:
@@ -328,15 +369,24 @@ class AudioEngine:
 
     async def _publish_live_pitch(self, live_pitch: LivePitch) -> None:
         """Publish pitch changes through Flet's event loop."""
-    self.app_state.update_live_pitch(live_pitch)
+        self.app_state.update_live_pitch(live_pitch)
 
     def get_active_strum_pcs(self) -> Set[int]:
-        return set(self._active_strum_pcs)
+        with self._analysis_lock:
+            return set(self._active_strum_pcs)
+
 
     def get_accumulated_arpeggio_pcs(self) -> Set[int]:
         now = time.time()
-        return {pc for pc, t in self._arpeggio_history if (now - t) <= 2.5}
+        with self._analysis_lock:
+            return {
+                pc for pc, timestamp in self._arpeggio_history
+                if now - timestamp <= 2.5
+            }
+
 
     def clear_arpeggio_buffer(self) -> None:
-        self._arpeggio_history.clear()
-        self.chroma_analyzer.clear()
+        with self._analysis_lock:
+            self._arpeggio_history.clear()
+            self.chroma_analyzer.clear()
+            self._active_strum_pcs.clear()
