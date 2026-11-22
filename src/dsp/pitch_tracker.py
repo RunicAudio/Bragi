@@ -48,39 +48,50 @@ class PitchTracker:
             return LivePitch(is_silent=True, rms_level=rms)
 
         r = np.correlate(signal, signal, mode="full")[n - 1:]
-
         if r[0] == 0:
             return LivePitch(is_silent=True, rms_level=rms)
 
-        r_norm = r / r[0]
+        # Compensate for decreasing sample overlap at longer lags.
+        lags = np.arange(n)
+        r_norm = r / (n - lags)
+        r_norm /= r_norm[0]
 
         search_region = r_norm[self.min_period:self.max_period]
 
-        if len(search_region) == 0:
+        if len(search_region) < 3:
             return LivePitch(is_silent=True, rms_level=rms)
 
-        peak_idx_rel = int(np.argmax(search_region))
-        peak_idx = peak_idx_rel + self.min_period
-        peak_val = search_region[peak_idx_rel]
+        # Find local autocorrelation maxima.
+        local_peaks = np.where(
+            (search_region[1:-1] >= search_region[:-2]) &
+            (search_region[1:-1] > search_region[2:])
+        )[0] + 1
 
-        if peak_val < 0.25:
+        # Select the earliest peak above the confidence threshold.
+        valid_peaks = local_peaks[search_region[local_peaks] >= 0.25]
+
+        if len(valid_peaks) == 0:
             return LivePitch(is_silent=True, rms_level=rms)
+
+        peak_idx = int(valid_peaks[0] + self.min_period)
+        peak_val = r_norm[peak_idx]
 
         # Quadratic / parabolic interpolation
+        peak_idx_rel = peak_idx - self.min_period
+
         if 0 < peak_idx_rel < len(search_region) - 1:
-            alpha = float(search_region[peak_idx_rel - 1])
-            beta = float(search_region[peak_idx_rel])
-            gamma = float(search_region[peak_idx_rel + 1])
+            y1 = search_region[peak_idx_rel - 1]
+            y2 = search_region[peak_idx_rel]
+            y3 = search_region[peak_idx_rel + 1]
 
-            denom = 2.0 * (2.0 * beta - alpha - gamma)
+            denominator = y1 - 2 * y2 + y3
 
-            delta = (
-                (gamma - alpha) / denom
-                if abs(denom) > 1e-6
-                else 0.0
-            )
+            if denominator != 0:
+                adjustment = 0.5 * (y1 - y3) / denominator
+            else:
+                adjustment = 0.0
 
-            refined_lag = float(peak_idx) + delta
+            refined_lag = peak_idx + adjustment
         else:
             refined_lag = float(peak_idx)
 
