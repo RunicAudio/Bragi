@@ -59,9 +59,6 @@ class HintModal(ft.AlertDialog):
 
     def _close(self, e: ft.ControlEvent) -> None:
         target_page = e.page or self.page
+
         if target_page is not None:
-            if hasattr(target_page, "close"):
-                target_page.close(self)
-            else:
-                self.open = False
-                target_page.update()
+            target_page.pop_dialog()

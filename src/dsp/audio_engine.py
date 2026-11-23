@@ -356,12 +356,14 @@ class AudioEngine:
                 if now - self._last_ui_notify_time >= 0.05:
                     self._last_ui_notify_time = now
 
-                    page = self._ui_page
-                    if page is not None:
-                        try:
-                            page.run_task(self._publish_live_pitch, live_pitch)
-                        except Exception as e:
-                            print(f"[AudioEngine] UI dispatch error: {e}")
+                    if not self._dsp_stop_event.is_set():
+                        page = self._ui_page
+
+                        if page is not None:
+                            try:
+                                page.run_task(self._publish_live_pitch, live_pitch)
+                            except Exception as e:
+                                print(f"[AudioEngine] UI dispatch error: {e}")
 
             except Exception as e:
                 print(f"[AudioEngine] DSP worker error: {e}")

@@ -62,6 +62,8 @@ def main(page: ft.Page) -> None:
 
     # Shutdown handlers to prevent background thread crashes on exit
     def cleanup():
+        # Prevent further UI updates before shutting down audio.
+        audio_engine.set_ui_page(None)
         audio_engine.stop()
 
     page.on_disconnect = lambda e: cleanup()

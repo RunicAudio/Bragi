@@ -215,13 +215,9 @@ class TrainerView(ft.Container):
     def _open_hint_modal(self, e: ft.ControlEvent) -> None:
         modal = HintModal()
         target_page = e.page or self.page
+
         if target_page is not None:
-            if hasattr(target_page, "open"):
-                target_page.open(modal)
-            else:
-                target_page.dialog = modal
-                modal.open = True
-                target_page.update()
+            target_page.show_dialog(modal)
 
     def _on_gamification_changed(self) -> None:
         if self.page is not None:
