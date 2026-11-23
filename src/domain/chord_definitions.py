@@ -3,6 +3,7 @@ src/domain/chord_definitions.py
 ===============================
 Pydantic chord data models, quality definitions, and pitch class mapping.
 """
+import random
 
 from enum import Enum
 from typing import List, Optional, Tuple
@@ -83,3 +84,23 @@ def get_chord_pitch_classes(root_note: str, quality_str: str) -> List[int]:
     root_pc = MusicTheory.note_to_pitch_class(root_note)
     offsets = CHORD_INTERVAL_OFFSETS.get(quality_str, [0, 4, 7])
     return [(root_pc + offset) % 12 for offset in offsets]
+
+def get_available_chord_names() -> List[str]:
+    """Return every supported root and chord-quality combination."""
+    from domain.music_theory import CHROMATIC_SHARPS
+
+    return [
+        f"{root} {quality}"
+        for root in CHROMATIC_SHARPS
+        for quality in CHORD_INTERVAL_OFFSETS
+    ]
+
+
+def select_random_chord(previous_chord: Optional[str] = None) -> str:
+    """Select a random supported chord without immediately repeating."""
+    available = get_available_chord_names()
+
+    if previous_chord in available and len(available) > 1:
+        available.remove(previous_chord)
+
+    return random.choice(available)

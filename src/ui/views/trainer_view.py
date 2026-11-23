@@ -10,7 +10,10 @@ import time
 import flet as ft
 
 from core.app_state import ActiveViewMode, AppState, TrainerSubMode
-from domain.chord_definitions import get_chord_pitch_classes
+from domain.chord_definitions import (
+    get_chord_pitch_classes,
+    select_random_chord,
+)
 from domain.music_theory import CHROMATIC_SHARPS, MusicTheory
 from dsp.audio_engine import AudioEngine
 from ui.components.modals.hint_modal import HintModal
@@ -197,10 +200,13 @@ class TrainerView(ft.Container):
             self.app_state.target_note_name = new_note
             self.app_state.target_string_num = new_string
         else:
-            chords = ["C Major", "G Major", "A Minor", "E Minor", "D Dominant 7th"]
-            new_chord = random.choice(chords)
+            previous_chord = self.app_state.target_chord_name
+
+            new_chord = select_random_chord(previous_chord)
+
             root, quality = new_chord.split(" ", 1)
             pcs = set(get_chord_pitch_classes(root, quality))
+
             self.app_state.target_chord_name = new_chord
             self.app_state.target_chord_pcs = pcs
 
