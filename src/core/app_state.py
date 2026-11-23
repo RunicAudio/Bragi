@@ -173,27 +173,28 @@ class AppState:
             xp_earned=xp_earned,
         )
 
-        # Update Hero Boss Progression
-        if is_correct and response_time <= 2.0:
-            if self.trainer_mode == TrainerSubMode.SINGLE_NOTE:
-                self.hero_boss.consecutive_notes_under_2s += 1
-            elif self.trainer_mode == TrainerSubMode.STRUMMED_CHORD:
-                self.hero_boss.consecutive_chords_under_2s += 1
-            elif self.trainer_mode == TrainerSubMode.ARPEGGIO_CHORD:
-                self.hero_boss.consecutive_arpeggios_under_2s += 1
-        else:
-            if self.trainer_mode == TrainerSubMode.SINGLE_NOTE:
-                self.hero_boss.consecutive_notes_under_2s = 0
-            elif self.trainer_mode == TrainerSubMode.STRUMMED_CHORD:
-                self.hero_boss.consecutive_chords_under_2s = 0
-            elif self.trainer_mode == TrainerSubMode.ARPEGGIO_CHORD:
-                self.hero_boss.consecutive_arpeggios_under_2s = 0
+        # Update Hero Boss Progression (Trainer only)
+        if self.current_view == ActiveViewMode.TRAINER:
+            if is_correct and response_time <= 2.0:
+                if self.trainer_mode == TrainerSubMode.SINGLE_NOTE:
+                    self.hero_boss.consecutive_notes_under_2s += 1
+                elif self.trainer_mode == TrainerSubMode.STRUMMED_CHORD:
+                    self.hero_boss.consecutive_chords_under_2s += 1
+                elif self.trainer_mode == TrainerSubMode.ARPEGGIO_CHORD:
+                    self.hero_boss.consecutive_arpeggios_under_2s += 1
+            else:
+                if self.trainer_mode == TrainerSubMode.SINGLE_NOTE:
+                    self.hero_boss.consecutive_notes_under_2s = 0
+                elif self.trainer_mode == TrainerSubMode.STRUMMED_CHORD:
+                    self.hero_boss.consecutive_chords_under_2s = 0
+                elif self.trainer_mode == TrainerSubMode.ARPEGGIO_CHORD:
+                    self.hero_boss.consecutive_arpeggios_under_2s = 0
 
-        self.db.update_hero_boss_progress(
-            notes=self.hero_boss.consecutive_notes_under_2s,
-            chords=self.hero_boss.consecutive_chords_under_2s,
-            arpeggios=self.hero_boss.consecutive_arpeggios_under_2s,
-        )
+            self.db.update_hero_boss_progress(
+                notes=self.hero_boss.consecutive_notes_under_2s,
+                chords=self.hero_boss.consecutive_chords_under_2s,
+                arpeggios=self.hero_boss.consecutive_arpeggios_under_2s,
+            )
 
         # Evaluate Badge Unlocks
         self._evaluate_badges()
