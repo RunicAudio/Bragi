@@ -1,161 +1,236 @@
 # Bragi
 
-**A Guitar Learning, Pitch Detection, and Music Theory Training Application**
+**A guitar-focused fretboard, pitch-detection, and ear-training application.**
 
-Bragi is a desktop music-learning application designed to help musicians develop pitch recognition, chord identification, fretboard knowledge, and overall musical understanding through interactive exercises and real-time audio analysis.
+Bragi is a desktop application for practicing musical note recognition, identifying chord tones, developing fretboard familiarity, and improving aural recognition. It combines live audio analysis with guided guitar exercises, a chromatic tuner, generated listening examples, and locally stored practice progression.
 
-Built with Python, Flet, NumPy, and SQLite, Bragi combines real-time audio processing with an interactive training environment and persistent user progression.
+The application is built with Python and Flet. Its audio-analysis pipeline uses SoundDevice, NumPy, and SciPy-compatible numerical processing; musical definitions and training rules are separated from the interface and persistence layers.
+
+> **Project status:** Bragi is an actively developed project. The current application includes working trainer, tuner, ear-training, and analytics views. Some detection and progression behavior is still being refined; see [Current Capabilities and Known Limitations](#current-capabilities-and-known-limitations).
+
+---
+
+## Contents
+
+- [Features](#features)
+- [Technology](#technology)
+- [Project Structure](#project-structure)
+- [How the Application Works](#how-the-application-works)
+- [Installation](#installation)
+- [Running Bragi](#running-bragi)
+- [Audio Setup](#audio-setup)
+- [Tests](#tests)
+- [Local Data](#local-data)
+- [Current Capabilities and Known Limitations](#current-capabilities-and-known-limitations)
+- [Development](#development)
+- [License](#license)
 
 ---
 
 ## Features
 
-### 1. Real-Time Pitch Detection
+### Guitar Trainer
 
-Bragi analyzes incoming audio signals to identify individual musical notes.
+The Trainer provides three live-input practice modes:
 
-Current capabilities include:
+- **Single Note:** displays a target note and string, then advances when the detected note matches the target and is within the configured tuning tolerance for the selected hold duration.
+- **Strummed Chord:** analyzes simultaneous pitch classes and checks whether the target chord's pitch classes are present.
+- **Arpeggio Chord:** accumulates detected pitch classes over a rolling 2.5-second window and checks for the target chord tones.
 
-- Real-time monophonic pitch detection.
-- Frequency-to-note conversion.
-- Note identification.
-- Cents deviation measurement.
-- RMS-based signal monitoring.
-- Support for external audio interfaces.
-- Configurable audio input devices.
+The trainer also provides target skipping, theory hints, configurable trainer mode, and adjustable auto-advance hold timing.
 
-The pitch detection system uses autocorrelation and peak interpolation to estimate fundamental frequencies.
+### Real-Time Pitch Detection
 
-### 2. Chord Detection
+Bragi captures audio from a selected input device and estimates monophonic fundamental frequency. The live pitch result includes:
 
-Bragi includes a polyphonic analysis system designed to identify multiple simultaneous musical notes.
+- Note name and pitch class.
+- Estimated frequency.
+- Cents deviation from the nearest equal-tempered note.
+- In-tune status.
+- Input RMS level and silence status.
 
-Current capabilities include:
+The current pitch tracker uses autocorrelation, peak selection, and parabolic interpolation. The tuner and single-note trainer consume the same live pitch state.
 
-- FFT-based spectral analysis.
-- Pitch-class detection.
-- Chromagram analysis.
-- Harmonic suppression.
-- Multi-frame spectral integration.
-- Chord recognition through detected pitch classes.
+### Chord and Pitch-Class Analysis
 
-The chord detection system is designed to work alongside the monophonic pitch tracker without interfering with its processing.
+A separate chromagram analyzer performs FFT-based spectral analysis and maps spectral energy into 12 pitch classes. It uses a short multi-frame history and harmonic attenuation to produce candidate pitch classes for the trainer's strummed-chord mode. The audio engine also maintains the short history used by arpeggio mode.
 
-### 3. Interactive Guitar Trainer
+### Chromatic Tuner
 
-The Trainer provides an interactive environment for practicing note and chord identification using a connected instrument.
+The tuner displays the detected note, cents deviation, and a visual needle. Its status indicator distinguishes in-tune, close-to-pitch, and out-of-tune readings.
 
-Current training modes include:
+### Ear Training
 
-- Single Note Identification.
-- Strummed Chord Identification.
-- Arpeggio Chord Identification.
+Ear Training currently provides two listening exercise types:
 
-Training progress is recorded and connected to the application's progression system.
+- **Single Pitch:** identify a note from a set of note-name choices.
+- **Chord Quality:** distinguish among major, minor, diminished, and suspended-fourth triads.
 
-### 4. Ear Training
+Bragi generates the examples locally and provides replay controls.
 
-The Ear Training module provides listening exercises designed to improve musical recognition.
+### Analytics and Progression
 
-Current exercise modes include:
+Bragi stores practice results locally and displays:
 
-- Single Pitch Identification.
-- Chord Quality Identification.
+- Total experience points (XP) and user level.
+- Total attempts, accuracy, and average response time.
+- A consecutive-correct-answer streak.
+- Defined achievement badges and unlocked badge state.
+- Progress counters for the Hero Boss challenge.
 
-Audio samples are generated and played through the application's sample playback system.
-
-### 5. Tuner
-
-Bragi includes a real-time tuner interface displaying detected pitch information and tuning deviation.
-
-### 6. Analytics and Progression
-
-Bragi includes a gamification and analytics system designed to track learning progress.
-
-Current functionality includes:
-
-- Experience point accumulation.
-- User levels.
-- Consecutive correct-answer tracking.
-- Practice attempt logging.
-- Accuracy statistics.
-- Response-time tracking.
-- Achievement badges.
-- Hero Boss progression tracking.
-
-User progression and practice information are stored locally using SQLite.
+The application includes a catalog of 40 badge definitions. Unlock evaluation is currently implemented for a subset of those definitions; the full badge catalog should not be interpreted as evidence that every badge condition is already active.
 
 ---
 
-## Technology Stack
+## Technology
 
-| Technology | Purpose |
+| Technology | Role |
 |---|---|
-| Python 3.11+ | Primary programming language |
-| Flet | Desktop application interface |
-| NumPy | Numerical processing and signal analysis |
-| SciPy | Signal processing utilities |
-| SoundDevice | Audio input and output |
-| SoundFile | Audio file handling |
-| SQLite | Local database and persistence |
-| Pydantic | Data models and validation |
-| PyInstaller | Application packaging |
+| Python 3.10+ | Application language |
+| Flet | Desktop UI and event handling |
+| NumPy | Audio buffers and numerical analysis |
+| SciPy | Scientific-computing dependency |
+| SoundDevice | Audio input and generated audio playback |
+| Pydantic | Typed data models and validation |
+| SQLite | Local practice and progression storage |
+| pytest | Automated tests |
+| setuptools | Package and editable-install configuration |
 
-Additional dependencies are defined in `pyproject.toml`.
+Runtime dependencies are declared in `pyproject.toml`. The project does not currently declare SoundFile as a runtime dependency.
 
 ---
 
 ## Project Structure
 
+The following tree reflects the files currently present on the `main` branch. It excludes generated files, local environments, and user data.
+
 ```text
 Bragi/
-│
+├── .github/
+│   └── workflows/
+│       └── build.yml
+├── .vscode/
+│   └── settings.json
+├── assets/
+│   ├── bg.png
+│   ├── logo.ico
+│   ├── logo.png
+│   └── release-description.md
 ├── src/
-│   │
 │   ├── main.py
-│   │
 │   ├── core/
 │   │   └── app_state.py
-│   │
 │   ├── domain/
 │   │   ├── chord_definitions.py
 │   │   ├── gamification_policy.py
 │   │   ├── music_theory.py
 │   │   └── scale_definitions.py
-│   │
 │   ├── dsp/
 │   │   ├── audio_engine.py
 │   │   ├── chromagram.py
 │   │   ├── pitch_tracker.py
 │   │   └── sample_player.py
-│   │
 │   ├── storage/
 │   │   ├── db_manager.py
 │   │   └── path_utils.py
-│   │
 │   └── ui/
 │       ├── app_shell.py
-│       │
 │       ├── components/
 │       │   ├── header_nav.py
 │       │   └── modals/
-│       │
+│       │       ├── device_modal.py
+│       │       ├── filter_modal.py
+│       │       ├── hint_modal.py
+│       │       └── timing_modal.py
 │       └── views/
 │           ├── analytics_view.py
 │           ├── ear_training_view.py
 │           ├── trainer_view.py
 │           └── tuner_view.py
-│
-├── assets/
-│
+├── tests/
+│   ├── fixtures/
+│   │   └── real_guitar/
+│   │       └── low_e2.wav
+│   ├── test_app_state.py
+│   ├── test_audio_engine.py
+│   ├── test_chord_definitions.py
+│   ├── test_db_manager.py
+│   ├── test_gamification_policy.py
+│   ├── test_music_theory.py
+│   ├── test_pitch_tracker.py
+│   └── test_scale_definitions.py
+├── analyze_guitar_test.py
+├── record_guitar_test.py
 ├── pyproject.toml
-│
 ├── .gitignore
-│
 └── README.md
 ```
 
-*The structure above represents the primary application architecture. Additional files and resources may exist within individual directories.*
+### Source Responsibilities
+
+| Area | Responsibility |
+|---|---|
+| `src/main.py` | Application entry point; initializes shared state, views, UI shell, and audio engine. |
+| `src/core/` | Central observable application state, view selection, live pitch state, and practice/progression events. |
+| `src/domain/` | Music-theory calculations, chord and scale definitions, sequence generation, and gamification rules. |
+| `src/dsp/` | Audio-device management, capture and processing pipeline, pitch tracking, chromagram analysis, and generated audio playback. |
+| `src/storage/` | SQLite data access and platform-specific application-data paths. |
+| `src/ui/` | Flet application shell, navigation, dialogs, and feature views. |
+| `tests/` | Unit and integration-oriented tests for state, audio processing, theory, storage, scales, chords, and progression rules. |
+| Root diagnostic scripts | Manual audio recording and guitar pitch-analysis utilities. |
+
+---
+
+## How the Application Works
+
+### Audio Processing
+
+The live audio path is separated from the Flet interface:
+
+```text
+Audio Input Device
+       |
+       v
+SoundDevice / PortAudio
+       |
+       v
+Audio Callback
+       |
+       v
+Bounded Audio Queue
+       |
+       v
+Background DSP Worker
+       |
+       +--------------------------+
+       |                          |
+       v                          v
+Autocorrelation Pitch        FFT Chromagram
+Tracker                      Analyzer
+       |                          |
+       v                          v
+Live Note / Cents             Active Pitch Classes
+       |                          |
+       +-------------+------------+
+                     |
+                     v
+                AppState
+                     |
+                     v
+              Flet UI Views
+```
+
+The PortAudio callback copies incoming samples into a bounded queue. A background worker maintains the rolling analysis buffer and runs the pitch and chromagram analyzers. Pitch updates are dispatched to the Flet event loop; the interface does not perform the main DSP calculations inside the audio callback.
+
+### Application State and UI
+
+`AppState` is the shared state container. It tracks the active view, trainer mode, target information, live pitch result, timing preference, and progression data. Views subscribe to state notifications and update when relevant state changes.
+
+`AppShell` provides the background, header navigation, and active-view container. Individual screens are implemented separately under `src/ui/views/`, while reusable navigation and dialogs live under `src/ui/components/`.
+
+### Domain and Persistence
+
+The domain layer contains musical definitions and rules without owning the UI. The storage layer provides SQLite access through `DatabaseManager`. The database stores the user profile, practice attempts, unlocked badges, and Hero Boss progress.
 
 ---
 
@@ -163,260 +238,162 @@ Bragi/
 
 ### Requirements
 
-- Windows 10/11 or another supported desktop operating system.
-- Python 3.11 or newer.
-- A working audio input device.
-- Git (recommended for development).
+- Python 3.10 or newer.
+- Git.
+- An audio input device for the live Trainer and Tuner features.
+- Windows, macOS, or Linux with a supported audio backend. Audio-device availability depends on the operating system and installed drivers.
 
 ### 1. Clone the Repository
 
 ```bash
 git clone https://github.com/RunicAudio/Bragi.git
-```
-
-### 2. Navigate to the Project
-
-```bash
 cd Bragi
 ```
 
-### 3. Create a Virtual Environment
+### 2. Create a Virtual Environment
 
-Windows:
+**Windows PowerShell**
 
 ```powershell
 python -m venv .venv
-```
-
-### 4. Activate the Environment
-
-```powershell
 .venv\Scripts\Activate.ps1
 ```
 
-### 5. Install Dependencies
+**macOS / Linux**
 
-```powershell
-python -m pip install --upgrade pip
-pip install -e .
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
-### 6. Launch Bragi
+### 3. Install Bragi and Its Dependencies
 
-```powershell
+From the repository root:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+On Linux, SoundDevice/PortAudio may require system audio development libraries or PortAudio packages supplied by the distribution.
+
+---
+
+## Running Bragi
+
+Run the application from the repository root:
+
+```bash
 python src/main.py
 ```
 
+The application initializes its shared state and views, then starts the audio engine. Connect and configure an input device before using live-input exercises.
+
 ---
 
-## Audio Configuration
+## Audio Setup
 
-Bragi uses SoundDevice for audio acquisition and processing.
-
-For the best experience:
-
-1. Connect your guitar or instrument to an audio interface.
-2. Connect the interface to your computer.
+1. Connect the guitar or other instrument to an audio interface.
+2. Connect the interface to the computer and ensure its driver is available to the operating system.
 3. Launch Bragi.
-4. Open the device configuration interface.
-5. Select the appropriate audio input.
-6. Verify that incoming audio is being detected.
+4. Open the audio-input setup dialog from the header.
+5. Select the intended input device.
+6. Play a note and verify that the live input indicator responds.
 
-### Recommended Audio Configuration
+### Suggested Starting Configuration
 
-| Setting | Recommendation |
+| Setting | Starting point |
 |---|---|
-| Sample Rate | 48,000 Hz |
-| Input | Audio interface instrument input |
-| Input Signal | Clean, unclipped signal |
-| Monitoring | Direct monitoring or external monitoring |
-| Instrument | Electric guitar, acoustic guitar, or compatible audio source |
+| Sample rate | Use the input device's native rate; 48 kHz is a suitable common setting. |
+| Input | A direct instrument input or a clean interface line input. |
+| Input level | Strong enough for reliable analysis without clipping. |
+| Signal | Prefer a clean, relatively noise-free signal for pitch exercises. |
 
-Audio device availability and supported configurations depend on the operating system and hardware.
+Bragi requests mono input for its current live-analysis stream. The audio engine queries the selected device's default sample rate and attempts that rate before trying an alternate common rate.
 
 ---
 
-## Application Architecture
+## Tests
 
-Bragi uses a modular architecture to separate audio processing, musical interpretation, application state, persistence, and interface rendering.
+Install the project and pytest in the active environment, then run the test suite from the repository root:
 
-### Audio Processing Pipeline
-
-```text
-Audio Input
-    |
-    v
-SoundDevice / PortAudio
-    |
-    v
-Audio Capture Callback
-    |
-    v
-Audio Processing Queue
-    |
-    v
-Background DSP Worker
-    |
-    +----------------------+
-    |                      |
-    v                      v
-Pitch Tracker        Chromagram Analyzer
-    |                      |
-    v                      v
-Note Detection       Pitch-Class Detection
-    |                      |
-    +----------+-----------+
-               |
-               v
-           AppState
-               |
-               v
-          Flet Interface
+```powershell
+python -m pytest -v
 ```
 
-### Architectural Components
+Run an individual test module when working on a specific component:
 
-**Core**
+```powershell
+python -m pytest tests/test_pitch_tracker.py -v
+python -m pytest tests/test_audio_engine.py -v
+```
 
-Manages centralized application state, event notifications, trainer configuration, and progression.
-
-**Domain**
-
-Contains music theory definitions, chord structures, scale definitions, and gamification rules.
-
-**DSP**
-
-Handles audio capture, pitch tracking, chromagram analysis, and sample playback.
-
-**Storage**
-
-Manages SQLite database operations and application data paths.
-
-**UI**
-
-Contains the Flet application shell, reusable interface components, modals, and individual application views.
+The real-guitar fixture at `tests/fixtures/real_guitar/low_e2.wav` supports testing against a recorded instrument signal. The root-level `record_guitar_test.py` and `analyze_guitar_test.py` scripts are manual diagnostic tools; they are not part of the automated pytest suite.
 
 ---
 
-## Data Storage
+## Local Data
 
-Bragi uses SQLite for local persistence.
+Bragi uses SQLite for user progression and practice history. The database is created in the operating system's application-data directory by `src/storage/path_utils.py`:
 
-Stored information includes:
+| Platform | Application data directory |
+|---|---|
+| Windows | `%APPDATA%/Bragi` |
+| macOS | `~/Library/Application Support/Bragi` |
+| Linux / other Unix | `~/.config/Bragi` |
 
-- User progression.
-- Experience points.
-- User levels.
-- Practice attempts.
-- Response times.
-- Accuracy statistics.
-- Achievement unlocks.
-- Hero Boss progression.
+The default database filename is `bragi_progress.db`. It contains the user profile, practice-attempt history, unlocked badge IDs, and Hero Boss counters. These files are local application data and should not be committed to the repository.
 
-Application data is stored locally rather than requiring a remote database service.
+---
+
+## Current Capabilities and Known Limitations
+
+The following describes the implementation on `main`, rather than intended future behavior:
+
+- **Single-note validation:** the trainer checks the detected note name and in-tune state, and displays a target string. It does not currently verify the physical string or octave independently.
+- **Continuous pitch analysis:** the pitch tracker analyzes rolling audio frames. A dedicated note-onset detector and robust idle-noise rejection are not yet implemented.
+- **Chord recognition:** strummed-chord validation checks for the target pitch classes. It does not identify a complete guitar voicing, inversion, string assignment, or fret position.
+- **Arpeggio recognition:** arpeggio mode checks accumulated pitch classes over a 2.5-second window. It does not yet validate note order, rhythmic accuracy, or a specific voicing.
+- **Ear-training scope:** the current UI offers single-pitch and four-way chord-quality exercises. Interval training is not currently exposed as an exercise mode.
+- **Progression streak:** the stored streak increments after a correct answer and resets after an incorrect answer. It is a consecutive-answer streak, not a calendar-based daily practice streak.
+- **Badge progression:** 40 badge definitions are present, but the current unlock evaluation only checks a subset of badge IDs and conditions.
+- **Cross-platform audio:** the code uses SoundDevice, but reliable device selection and audio behavior still depend on each platform's audio backend and hardware.
+
+These are active development areas and should be considered when interpreting trainer results or analytics.
 
 ---
 
 ## Development
 
-The `dev` branch is the primary development branch.
+### Branching
 
-The `main` branch is reserved for stable releases.
+Use `main` as the stable baseline. Develop changes on `dev` or a focused feature branch, run the relevant tests, and integrate changes into `main` after review.
 
-### Branch Workflow
+### Development Practices
 
-```text
-main
-  |
-  +-------------------
-                      |
-                     dev
-                      |
-              Feature Development
-                      |
-                Testing & Review
-                      |
-               Stable Integration
-                      |
-                     main
-```
+- Keep real-time audio capture callbacks short; perform analysis in the background worker.
+- Keep DSP algorithms in `src/dsp/` and avoid coupling them to Flet controls.
+- Keep music-theory definitions and calculations in `src/domain/`.
+- Keep shared application state and event notifications in `src/core/app_state.py`.
+- Keep database access and local data paths in `src/storage/`.
+- Keep screen-specific presentation in `src/ui/views/` and reusable UI elements in `src/ui/components/`.
+- Add or update tests in `tests/` when changing behavior.
+- Do not commit virtual environments, local databases, caches, or generated build output.
 
-### Development Guidelines
+### Manual Audio Diagnostics
 
-- Keep DSP processing independent of UI rendering.
-- Avoid placing audio-processing operations inside UI callbacks.
-- Keep music theory calculations within the domain layer.
-- Keep database operations within the storage layer.
-- Use AppState for centralized application state.
-- Prefer reusable UI components.
-- Test changes before merging into the stable branch.
-- Avoid committing generated build artifacts, local databases, or virtual environments.
+The repository includes two root-level utilities:
 
----
+- `record_guitar_test.py` — records an input stream for manual inspection.
+- `analyze_guitar_test.py` — analyzes recorded guitar audio and reports pitch-detection results.
 
-## Current Development Status
-
-Bragi is actively under development.
-
-| Component | Status |
-|---|---|
-| Application Framework | Implemented |
-| Audio Input | Implemented |
-| Audio Device Selection | Implemented |
-| Single-Note Detection | Implemented |
-| Chord Detection | Implemented |
-| Guitar Trainer | Implemented |
-| Ear Training | Initial Implementation |
-| Tuner | Implemented |
-| Music Theory Foundation | Implemented |
-| SQLite Persistence | Implemented |
-| Analytics Dashboard | Initial Implementation |
-| Gamification System | Initial Implementation |
-| Automated Testing | Planned |
-| Performance Optimization | Planned |
-| Application Packaging | In Development |
-
-Feature status reflects implementation, not comprehensive validation across all hardware and operating systems.
-
----
-
-## Roadmap
-
-Planned development priorities include:
-
-- Automated unit and integration testing.
-- Improved pitch detection accuracy and reliability.
-- Improved polyphonic chord recognition.
-- More advanced chord identification.
-- Fretboard position recognition.
-- Improved ear training exercises.
-- Expanded music theory exercises.
-- More comprehensive analytics.
-- Expanded achievement and progression systems.
-- Performance optimization.
-- Improved application packaging and distribution.
-
----
-
-## Contributing
-
-Bragi is currently undergoing active development.
-
-Contributions, suggestions, and bug reports are welcome.
-
-When contributing:
-
-1. Work from the latest `dev` branch.
-2. Create a separate branch for significant features.
-3. Keep changes modular.
-4. Avoid introducing unnecessary dependencies.
-5. Validate changes before submitting them for integration.
+Use these scripts when investigating input-level, device, or pitch-tracking behavior.
 
 ---
 
 ## License
 
-License information will be added when the project's distribution and licensing terms are finalized.
+No license has been added to the repository yet. Until a license is published, the project should not be assumed to grant permissions for redistribution or reuse.
 
 ---
 
