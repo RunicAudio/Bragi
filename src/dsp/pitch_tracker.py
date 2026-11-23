@@ -67,13 +67,23 @@ class PitchTracker:
             (search_region[1:-1] > search_region[2:])
         )[0] + 1
 
-        # Select the earliest peak above the confidence threshold.
+        # Keep peaks above the confidence threshold.
         valid_peaks = local_peaks[search_region[local_peaks] >= 0.25]
 
         if len(valid_peaks) == 0:
             return LivePitch(is_silent=True, rms_level=rms)
 
-        peak_idx = int(valid_peaks[0] + self.min_period)
+        # Find the strongest autocorrelation peak.
+        peak_values = search_region[valid_peaks]
+        strongest_value = np.max(peak_values)
+
+        # Treat peaks within 0.02 of the strongest peak as equivalent.
+        # Select the earliest to favor the fundamental frequency.
+        near_best_peaks = valid_peaks[
+            peak_values >= strongest_value - 0.02
+        ]
+
+        peak_idx = int(near_best_peaks[0] + self.min_period)
         peak_val = r_norm[peak_idx]
 
         # Quadratic / parabolic interpolation
