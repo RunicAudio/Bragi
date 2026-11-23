@@ -1,10 +1,35 @@
-build/
-dist/
-*.exe
-*.zip
-*.pkg
-*.vscode
+# Python
 __pycache__/
 *.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing and tooling
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+build/
+dist/
 *.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# Application data and local configuration
+.env
+*.db
+*.sqlite
+*.sqlite3
+
+# OS
+.DS_Store
+Thumbs.db

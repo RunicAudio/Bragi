@@ -1,4 +1,0 @@
-flet
-sounddevice
-aubio
-numpy
