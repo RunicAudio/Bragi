@@ -1,4 +1,5 @@
 import pytest
+from domain.note_spelling import parse_note
 
 from domain.chord_definitions import (
     CHORD_INTERVAL_OFFSETS,
@@ -9,6 +10,7 @@ from domain.chord_definitions import (
     ChordDefinition,
     TargetChord,
     get_chord_pitch_classes,
+    get_chord_note_names,
     get_available_chord_names,
     select_random_chord,
 )
@@ -224,3 +226,71 @@ class TestChordModels:
 
         with pytest.raises(Exception):
             target.required_voicing = None
+
+class TestChordNoteSpelling:
+
+    @pytest.mark.parametrize(
+        "root,quality,expected",
+        [
+            ("C", "Major", ["C", "E", "G"]),
+            ("D", "Minor", ["D", "F", "A"]),
+            ("E", "Dominant 7th", ["E", "G#", "B", "D"]),
+            ("F", "Major 7th", ["F", "A", "C", "E"]),
+            ("A", "Minor 7th", ["A", "C", "E", "G"]),
+            ("C", "Sus4", ["C", "F", "G"]),
+            ("C", "Sus2", ["C", "D", "G"]),
+            ("B", "Diminished", ["B", "D", "F"]),
+        ],
+    )
+    def test_all_chord_qualities_spell_correctly(
+        self, root, quality, expected
+    ):
+        assert get_chord_note_names(root, quality) == expected
+
+    @pytest.mark.parametrize(
+        "root,quality,expected",
+        [
+            ("Db", "Major", ["Db", "F", "Ab"]),
+            ("F#", "Major", ["F#", "A#", "C#"]),
+            ("Bb", "Minor", ["Bb", "Db", "F"]),
+            ("Eb", "Minor", ["Eb", "Gb", "Bb"]),
+            ("G#", "Major", ["G#", "B#", "D#"]),
+            ("Ab", "Major", ["Ab", "C", "Eb"]),
+            ("C#", "Major", ["C#", "E#", "G#"]),
+            ("Gb", "Major", ["Gb", "Bb", "Db"]),
+        ],
+    )
+    def test_enharmonic_roots_preserve_correct_spelling(
+        self, root, quality, expected
+    ):
+        assert get_chord_note_names(root, quality) == expected
+
+    def test_unicode_accidental_output(self):
+        assert get_chord_note_names(
+            "Db", "Major", unicode_accidentals=True
+        ) == ["D♭", "F", "A♭"]
+
+    def test_rejects_unsupported_quality(self):
+        with pytest.raises(ValueError):
+            get_chord_note_names("C", "Augmented")
+
+    def test_rejects_invalid_root(self):
+        with pytest.raises(ValueError):
+            get_chord_note_names("H", "Major")
+
+    def test_chord_spelling_preserves_existing_pitch_classes(self):
+        roots = ["C", "Db", "F#", "Bb", "Eb", "G#"]
+
+        for root in roots:
+            for quality, offsets in CHORD_INTERVAL_OFFSETS.items():
+                notes = get_chord_note_names(root, quality)
+
+                pitch_classes = [
+                    parse_note(note).pitch_class
+                    for note in notes
+                ]
+
+                assert pitch_classes == get_chord_pitch_classes(
+                    root, quality
+                )
+                assert len(notes) == len(offsets)

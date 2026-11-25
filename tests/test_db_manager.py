@@ -334,29 +334,29 @@ def test_hero_boss_progress_fields_update_independently(db):
 # DATABASE CONSTRAINTS
 # ============================================================
 
-def test_user_profile_enforces_singleton_id(db):
+def test_user_profile_enforces_one_profile_per_player(db):
     with pytest.raises(sqlite3.IntegrityError):
         with db._get_connection() as conn:
             conn.execute(
                 """
                 INSERT INTO user_profile (
-                    id, total_xp, user_level, current_streak
+                    player_id, total_xp, user_level, current_streak
                 )
-                VALUES (2, 0, 1, 0)
+                VALUES (1, 0, 1, 0)
                 """
             )
 
 
-def test_hero_boss_enforces_singleton_id(db):
+def test_hero_boss_enforces_one_record_per_player(db):
     with pytest.raises(sqlite3.IntegrityError):
         with db._get_connection() as conn:
             conn.execute(
                 """
                 INSERT INTO hero_boss_progress (
-                    id, consecutive_notes, consecutive_chords,
-                    consecutive_arpeggios
+                    player_id, consecutive_notes,
+                    consecutive_chords, consecutive_arpeggios
                 )
-                VALUES (2, 0, 0, 0)
+                VALUES (1, 0, 0, 0)
                 """
             )
 
@@ -370,3 +370,399 @@ def test_badge_id_is_unique(db):
                 "INSERT INTO unlocked_badges (badge_id, unlocked_at) VALUES (?, ?)",
                 ("tr_b1", 1234567890.0),
             )
+
+# ============================================================
+# MULTI-PLAYER MANAGEMENT
+# ============================================================
+
+def test_database_creates_default_player(db):
+    players = db.get_players()
+
+    assert len(players) == 1
+    assert players[0].id == 1
+    assert players[0].name == "Player 1"
+
+
+def test_default_player_is_active(db):
+    assert db.get_active_player_id() == 1
+
+
+def test_create_player_returns_unique_id(db):
+    player_2 = db.create_player("Player 2")
+    player_3 = db.create_player("Player 3")
+
+    assert player_2 != player_3
+    assert player_2 != 1
+    assert player_3 != 1
+
+
+def test_create_player_persists_name(db):
+    player_id = db.create_player("Alex")
+
+    player = db.get_player(player_id)
+
+    assert player is not None
+    assert player.id == player_id
+    assert player.name == "Alex"
+
+
+def test_get_players_returns_all_players(db):
+    db.create_player("Alex")
+    db.create_player("Jordan")
+
+    players = db.get_players()
+    names = {player.name for player in players}
+
+    assert names == {"Player 1", "Alex", "Jordan"}
+
+
+def test_new_player_becomes_active(db):
+    player_id = db.create_player("Alex")
+
+    assert db.get_active_player_id() == player_id
+
+
+def test_switching_active_player_persists(db):
+    player_2 = db.create_player("Player 2")
+
+    db.set_active_player_id(1)
+    assert db.get_active_player_id() == 1
+
+    db.set_active_player_id(player_2)
+    assert db.get_active_player_id() == player_2
+
+
+def test_cannot_activate_nonexistent_player(db):
+    with pytest.raises(ValueError):
+        db.set_active_player_id(9999)
+
+
+def test_player_data_survives_database_reinitialization(db):
+    player_id = db.create_player("Alex")
+
+    db._init_db()
+
+    player = db.get_player(player_id)
+
+    assert player is not None
+    assert player.name == "Alex"
+    assert db.get_active_player_id() == player_id
+
+# ============================================================
+# PLAYER-SCOPED DATA
+# ============================================================
+
+def test_player_profiles_are_independent(db):
+    player_2 = db.create_player("Alex")
+
+    db.update_user_profile(
+        500, 5, 10, "2026-11-25", player_id=1
+    )
+    db.update_user_profile(
+        100, 2, 3, "2026-11-24", player_id=player_2
+    )
+
+    assert db.get_user_profile(1).total_xp == 500
+    assert db.get_user_profile(player_2).total_xp == 100
+
+
+def test_practice_attempts_are_player_scoped(db):
+    player_2 = db.create_player("Alex")
+
+    db.log_attempt("TRAINER", "NOTES", "C4", 1.0, True, 10, player_id=1)
+    db.log_attempt("TRAINER", "NOTES", "E4", 2.0, False, 0, player_id=player_2)
+
+    assert db.get_analytics_summary(1)["total_attempts"] == 1
+    assert db.get_analytics_summary(player_2)["total_attempts"] == 1
+
+
+def test_badges_are_player_scoped(db):
+    player_2 = db.create_player("Alex")
+
+    assert db.unlock_badge("tr_b1", player_id=1) is True
+    assert db.unlock_badge("tr_b1", player_id=player_2) is True
+
+    assert "tr_b1" in db.get_unlocked_badge_ids(1)
+    assert "tr_b1" in db.get_unlocked_badge_ids(player_2)
+
+
+def test_hero_boss_progress_is_player_scoped(db):
+    player_2 = db.create_player("Alex")
+
+    db.update_hero_boss_progress(10, 20, 30, player_id=1)
+    db.update_hero_boss_progress(5, 6, 7, player_id=player_2)
+
+    assert db.get_hero_boss_progress(1).consecutive_notes == 10
+    assert db.get_hero_boss_progress(player_2).consecutive_notes == 5
+
+
+def test_reset_player_progress_only_resets_selected_player(db):
+    player_2 = db.create_player("Alex")
+
+    db.update_user_profile(500, 5, 10, "2026-11-25", player_id=1)
+    db.update_user_profile(200, 3, 4, "2026-11-25", player_id=player_2)
+
+    db.log_attempt("TRAINER", "NOTES", "C4", 1.0, True, 10, player_id=1)
+    db.log_attempt("TRAINER", "NOTES", "E4", 1.0, True, 10, player_id=player_2)
+
+    db.unlock_badge("tr_b1", player_id=1)
+    db.unlock_badge("tr_b1", player_id=player_2)
+
+    db.update_hero_boss_progress(10, 20, 30, player_id=1)
+    db.update_hero_boss_progress(5, 6, 7, player_id=player_2)
+
+    db.reset_player_progress(1)
+
+    assert db.get_user_profile(1).total_xp == 0
+    assert db.get_analytics_summary(1)["total_attempts"] == 0
+    assert db.get_unlocked_badge_ids(1) == set()
+    assert db.get_hero_boss_progress(1).consecutive_notes == 0
+
+    assert db.get_user_profile(player_2).total_xp == 200
+    assert db.get_analytics_summary(player_2)["total_attempts"] == 1
+    assert "tr_b1" in db.get_unlocked_badge_ids(player_2)
+    assert db.get_hero_boss_progress(player_2).consecutive_notes == 5
+
+def test_legacy_database_migrates_all_data_to_player_one(
+    tmp_path, monkeypatch
+):
+    """Existing single-player data must survive the multi-player migration."""
+
+    db_file = tmp_path / "legacy_bragi.db"
+
+    # Build a database using the original single-player schema.
+    with sqlite3.connect(db_file) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE user_profile (
+                id INTEGER PRIMARY KEY,
+                total_xp INTEGER NOT NULL DEFAULT 0,
+                user_level INTEGER NOT NULL DEFAULT 1,
+                current_streak INTEGER NOT NULL DEFAULT 0,
+                last_practice_date TEXT DEFAULT ''
+            );
+
+            CREATE TABLE practice_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                view_mode TEXT NOT NULL,
+                trainer_submode TEXT NOT NULL,
+                target_name TEXT NOT NULL,
+                response_time_sec REAL NOT NULL,
+                is_correct INTEGER NOT NULL,
+                xp_earned INTEGER NOT NULL
+            );
+
+            CREATE TABLE unlocked_badges (
+                badge_id TEXT PRIMARY KEY,
+                unlocked_at REAL NOT NULL
+            );
+
+            CREATE TABLE hero_boss_progress (
+                id INTEGER PRIMARY KEY,
+                consecutive_notes INTEGER NOT NULL DEFAULT 0,
+                consecutive_chords INTEGER NOT NULL DEFAULT 0,
+                consecutive_arpeggios INTEGER NOT NULL DEFAULT 0
+            );
+
+            INSERT INTO user_profile (
+                id, total_xp, user_level, current_streak,
+                last_practice_date
+            )
+            VALUES (1, 1250, 5, 12, '2026-11-24');
+
+            INSERT INTO practice_attempts (
+                timestamp, view_mode, trainer_submode,
+                target_name, response_time_sec,
+                is_correct, xp_earned
+            )
+            VALUES (
+                1732400000.0, 'chords', 'recognition',
+                'C Major', 1.25, 1, 10
+            );
+
+            INSERT INTO unlocked_badges (badge_id, unlocked_at)
+            VALUES ('first_chord', 1732400000.0);
+
+            INSERT INTO hero_boss_progress (
+                id, consecutive_notes, consecutive_chords,
+                consecutive_arpeggios
+            )
+            VALUES (1, 8, 6, 4);
+            """
+        )
+
+    monkeypatch.setattr(
+        "storage.db_manager.get_db_path",
+        lambda: db_file,
+    )
+
+    # Initializing the manager should migrate the legacy database.
+    db = DatabaseManager()
+
+    # Verify profile migration.
+    profile = db.get_user_profile()
+
+    assert profile == UserProfileData(
+        total_xp=1250,
+        user_level=5,
+        current_streak=12,
+        last_practice_date="2026-11-24",
+    )
+
+    # Verify Hero Boss migration.
+    boss = db.get_hero_boss_progress()
+
+    assert boss == HeroBossData(
+        consecutive_notes=8,
+        consecutive_chords=6,
+        consecutive_arpeggios=4,
+    )
+
+    # Verify player identity and active-player setting.
+    assert db.get_active_player_id() == 1
+
+    players = db.get_players()
+
+    assert len(players) == 1
+    assert players[0].id == 1
+    assert players[0].name == "Player 1"
+
+    with db._get_connection() as conn:
+        # Verify practice history.
+        attempts = conn.execute(
+            """
+            SELECT *
+            FROM practice_attempts
+            WHERE player_id = 1
+            """
+        ).fetchall()
+
+        assert len(attempts) == 1
+        assert attempts[0]["target_name"] == "C Major"
+        assert attempts[0]["is_correct"] == 1
+        assert attempts[0]["xp_earned"] == 10
+
+        # Verify badge migration.
+        badges = conn.execute(
+            """
+            SELECT *
+            FROM unlocked_badges
+            WHERE player_id = 1
+            """
+        ).fetchall()
+
+        assert len(badges) == 1
+        assert badges[0]["badge_id"] == "first_chord"
+
+        # Verify migration version.
+        version = conn.execute(
+            "PRAGMA user_version"
+        ).fetchone()[0]
+
+        assert version == 1
+
+        # Verify temporary legacy tables were removed.
+        tables = {
+            row["name"]
+            for row in conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table'
+                """
+            ).fetchall()
+        }
+
+        assert not any(
+            table.endswith("_legacy")
+            for table in tables
+        )
+
+    # Reinitialization must not duplicate or erase migrated data.
+    db._init_db()
+
+    with db._get_connection() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM practice_attempts"
+        ).fetchone()[0] == 1
+
+        assert conn.execute(
+            "SELECT COUNT(*) FROM unlocked_badges"
+        ).fetchone()[0] == 1
+
+    assert db.get_user_profile().total_xp == 1250
+
+def test_failed_migration_rolls_back_all_schema_changes(
+    tmp_path, monkeypatch
+):
+    """A failed migration must leave the original database unchanged."""
+
+    db_file = tmp_path / "failed_migration.db"
+
+    # Create a malformed legacy database.
+    # last_practice_date is intentionally missing.
+    with sqlite3.connect(db_file) as conn:
+        conn.execute(
+            """
+            CREATE TABLE user_profile (
+                id INTEGER PRIMARY KEY,
+                total_xp INTEGER NOT NULL DEFAULT 0,
+                user_level INTEGER NOT NULL DEFAULT 1,
+                current_streak INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            INSERT INTO user_profile (
+                id, total_xp, user_level, current_streak
+            )
+            VALUES (1, 750, 4, 9)
+            """
+        )
+
+    monkeypatch.setattr(
+        "storage.db_manager.get_db_path",
+        lambda: db_file,
+    )
+
+    # Migration should fail when it attempts to read the missing column.
+    with pytest.raises(IndexError):
+        DatabaseManager()
+
+    # Inspect the database independently after the failed migration.
+    with sqlite3.connect(db_file) as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table'
+                """
+            ).fetchall()
+        }
+
+        # The original table must retain its original name.
+        assert "user_profile" in tables
+        assert "user_profile_legacy" not in tables
+
+        # No partially created multi-player schema should remain.
+        assert "players" not in tables
+        assert "app_settings" not in tables
+
+        # The migration version must remain unchanged.
+        version = conn.execute(
+            "PRAGMA user_version"
+        ).fetchone()[0]
+
+        assert version == 0
+
+        # Original data must remain intact.
+        profile = conn.execute(
+            "SELECT * FROM user_profile WHERE id = 1"
+        ).fetchone()
+
+        assert profile == (1, 750, 4, 9)

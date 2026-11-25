@@ -8,6 +8,7 @@ import random
 from enum import Enum
 from typing import List, Optional, Tuple
 from pydantic import BaseModel, ConfigDict
+from domain.note_spelling import spell_interval
 
 
 class ChordQuality(str, Enum):
@@ -77,13 +78,59 @@ CHORD_INTERVAL_OFFSETS = {
     "Diminished": [0, 3, 6],
 }
 
+CHORD_DIATONIC_INTERVALS = {
+    "Major": [1, 3, 5],
+    "Minor": [1, 3, 5],
+    "Dominant 7th": [1, 3, 5, 7],
+    "Major 7th": [1, 3, 5, 7],
+    "Minor 7th": [1, 3, 5, 7],
+    "Sus4": [1, 4, 5],
+    "Sus2": [1, 2, 5],
+    "Diminished": [1, 3, 5],
+}
 
 def get_chord_pitch_classes(root_note: str, quality_str: str) -> List[int]:
     """Calculates pitch class integers (0..11) for a root and chord quality."""
     from domain.music_theory import MusicTheory
+
+    if quality_str not in CHORD_INTERVAL_OFFSETS:
+        raise ValueError(f"Unsupported chord quality: {quality_str}")
+
     root_pc = MusicTheory.note_to_pitch_class(root_note)
-    offsets = CHORD_INTERVAL_OFFSETS.get(quality_str, [0, 4, 7])
+    offsets = CHORD_INTERVAL_OFFSETS[quality_str]
+
     return [(root_pc + offset) % 12 for offset in offsets]
+
+def get_chord_note_names(
+    root_note: str,
+    quality_str: str,
+    unicode_accidentals: bool = False,
+) -> List[str]:
+
+   
+    if quality_str not in CHORD_INTERVAL_OFFSETS:
+        raise ValueError(f"Unsupported chord quality: {quality_str}")
+
+    offsets = CHORD_INTERVAL_OFFSETS[quality_str]
+    interval_numbers = CHORD_DIATONIC_INTERVALS[quality_str]
+
+    if len(offsets) != len(interval_numbers):
+        raise ValueError(
+            f"Inconsistent interval definitions for {quality_str}"
+        )
+
+    return [
+        spell_interval(
+            root_note=root_note,
+            interval_number=interval_number,
+            semitones=semitones,
+            unicode_accidentals=unicode_accidentals,
+        )
+        for interval_number, semitones in zip(
+            interval_numbers,
+            offsets,
+        )
+    ]
 
 def get_available_chord_names() -> List[str]:
     """Return every supported root and chord-quality combination."""

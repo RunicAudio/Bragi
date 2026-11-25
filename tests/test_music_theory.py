@@ -34,7 +34,7 @@ class TestNoteToPitchClass:
     def test_whitespace_is_ignored(self):
         assert MusicTheory.note_to_pitch_class(" C ") == 0
 
-    @pytest.mark.parametrize("note", ["H", "X", "", "Db", "Bb"])
+    @pytest.mark.parametrize("note", ["H", "X", "", "Invalid", "C##", "Dbb"])
     def test_invalid_notes_return_negative_one(self, note):
         assert MusicTheory.note_to_pitch_class(note) == -1
 
@@ -69,7 +69,66 @@ class TestPitchClassToNote:
         assert MusicTheory.pitch_class_to_note(-1) == "B"
         assert MusicTheory.pitch_class_to_note(-12) == "C"
 
+class TestEnharmonicNoteSupport:
 
+    @pytest.mark.parametrize(
+        "note, expected",
+        [
+            ("Db", 1),
+            ("Eb", 3),
+            ("Gb", 6),
+            ("Ab", 8),
+            ("Bb", 10),
+            ("C#", 1),
+            ("D#", 3),
+            ("F#", 6),
+            ("G#", 8),
+            ("A#", 10),
+            ("E#", 5),
+            ("Fb", 4),
+            ("B#", 0),
+            ("Cb", 11),
+        ],
+    )
+    def test_enharmonic_notes(self, note, expected):
+        assert MusicTheory.note_to_pitch_class(note) == expected
+
+    def test_unicode_accidentals(self):
+        assert MusicTheory.note_to_pitch_class("C♯") == 1
+        assert MusicTheory.note_to_pitch_class("D♭") == 1
+
+    def test_lowercase_flat_input(self):
+        assert MusicTheory.note_to_pitch_class("db") == 1
+        assert MusicTheory.note_to_pitch_class("bb") == 10
+
+class TestFlatNotation:
+
+    @pytest.mark.parametrize(
+        "pitch_class, expected",
+        [
+            (0, "C"),
+            (1, "Db"),
+            (2, "D"),
+            (3, "Eb"),
+            (4, "E"),
+            (5, "F"),
+            (6, "Gb"),
+            (7, "G"),
+            (8, "Ab"),
+            (9, "A"),
+            (10, "Bb"),
+            (11, "B"),
+        ],
+    )
+    def test_flat_pitch_class_names(self, pitch_class, expected):
+        assert MusicTheory.pitch_class_to_note(
+            pitch_class,
+            prefer_flats=True
+        ) == expected
+
+    def test_default_output_remains_sharp_based(self):
+        assert MusicTheory.pitch_class_to_note(1) == "C#"
+        assert MusicTheory.pitch_class_to_note(10) == "A#"
 class TestFrequencyToNoteInfo:
 
     @pytest.mark.parametrize(
@@ -121,3 +180,13 @@ class TestFrequencyToNoteInfo:
     def test_invalid_nonpositive_frequencies(self):
         assert MusicTheory.frequency_to_note_info(0) == ("--", -1, 0.0)
         assert MusicTheory.frequency_to_note_info(-100) == ("--", -1, 0.0)
+
+def test_frequency_conversion_supports_flat_notation():
+    note, pitch_class, cents = MusicTheory.frequency_to_note_info(
+        277.18,
+        prefer_flats=True
+    )
+
+    assert note == "Db"
+    assert pitch_class == 1
+    assert abs(cents) < 2.0

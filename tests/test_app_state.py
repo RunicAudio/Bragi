@@ -16,32 +16,121 @@ from storage.db_manager import (
 
 class FakeDatabase:
     def __init__(self):
-        self.profile = UserProfileData()
-        self.badges = set()
-        self.boss = HeroBossData()
-        self.attempts = []
+        self.active_player_id = 1
 
+        # Independent data for each player.
+        self.profiles = {
+            1: UserProfileData(),
+            2: UserProfileData(),
+        }
+        self.badges_by_player = {
+            1: set(),
+            2: set(),
+        }
+        self.bosses = {
+            1: HeroBossData(),
+            2: HeroBossData(),
+        }
+        self.attempts_by_player = {
+            1: [],
+            2: [],
+        }
+
+        # Legacy test histories retained for existing tests.
         self.profile_updates = []
         self.boss_updates = []
 
-    def get_user_profile(self):
-        return self.profile
+        # Player-specific histories for isolation tests.
+        self.profile_updates_by_player = {1: [], 2: []}
+        self.boss_updates_by_player = {1: [], 2: []}
 
-    def get_unlocked_badge_ids(self):
-        return self.badges.copy()
+    # Legacy attributes: always refer to the active player.
+    @property
+    def profile(self):
+        return self.profiles[self.active_player_id]
 
-    def get_hero_boss_progress(self):
-        return self.boss
+    @property
+    def badges(self):
+        return self.badges_by_player[self.active_player_id]
+
+    @property
+    def boss(self):
+        return self.bosses[self.active_player_id]
+
+    @property
+    def attempts(self):
+        return self.attempts_by_player[self.active_player_id]
+
+    # Player management.
+    def get_active_player_id(self):
+        return self.active_player_id
+
+    def set_active_player_id(self, player_id):
+        if player_id not in self.profiles:
+            raise ValueError(f"Player {player_id} does not exist.")
+
+        self.active_player_id = player_id
+
+    # Profile.
+    def get_user_profile(self, player_id=None):
+        player_id = player_id or self.active_player_id
+        return self.profiles[player_id]
 
     def update_user_profile(self, **kwargs):
-        self.profile_updates.append(kwargs)
+        player_id = kwargs.pop("player_id", self.active_player_id)
 
+        self.profile_updates.append(kwargs.copy())
+        self.profile_updates_by_player[player_id].append(kwargs.copy())
+
+    # Badges.
+    def get_unlocked_badge_ids(self, player_id=None):
+        player_id = player_id or self.active_player_id
+        return self.badges_by_player[player_id].copy()
+
+    def unlock_badge(self, badge_id, player_id=None):
+        player_id = player_id or self.active_player_id
+        badges = self.badges_by_player[player_id]
+
+        if badge_id in badges:
+            return False
+
+        badges.add(badge_id)
+        return True
+
+    # Hero Boss progression.
+    def get_hero_boss_progress(self, player_id=None):
+        player_id = player_id or self.active_player_id
+        return self.bosses[player_id]
+
+    def update_hero_boss_progress(self, notes, chords, arpeggios, player_id=None):
+        player_id = player_id or self.active_player_id
+
+        update = {
+            "notes": notes,
+            "chords": chords,
+            "arpeggios": arpeggios,
+        }
+
+        self.boss_updates.append(update.copy())
+        self.boss_updates_by_player[player_id].append(update.copy())
+
+        self.bosses[player_id] = HeroBossData(
+            consecutive_notes=notes,
+            consecutive_chords=chords,
+            consecutive_arpeggios=arpeggios,
+        )
+
+    # Practice attempts and analytics.
     def log_attempt(self, **kwargs):
-        self.attempts.append(kwargs)
+        player_id = kwargs.pop("player_id", self.active_player_id)
+        self.attempts_by_player[player_id].append(kwargs.copy())
 
-    def get_analytics_summary(self):
-        total = len(self.attempts)
-        correct = sum(a["is_correct"] for a in self.attempts)
+    def get_analytics_summary(self, player_id=None):
+        player_id = player_id or self.active_player_id
+        attempts = self.attempts_by_player[player_id]
+
+        total = len(attempts)
+        correct = sum(a["is_correct"] for a in attempts)
 
         return {
             "total_attempts": total,
@@ -52,27 +141,6 @@ class FakeDatabase:
             "avg_response_speed_sec": 0.0,
             "target_breakdown": {},
         }
-
-    def unlock_badge(self, badge_id):
-        if badge_id in self.badges:
-            return False
-
-        self.badges.add(badge_id)
-        return True
-
-    def update_hero_boss_progress(self, notes, chords, arpeggios):
-        self.boss_updates.append({
-            "notes": notes,
-            "chords": chords,
-            "arpeggios": arpeggios,
-        })
-
-        self.boss = HeroBossData(
-            consecutive_notes=notes,
-            consecutive_chords=chords,
-            consecutive_arpeggios=arpeggios,
-        )
-
 
 @pytest.fixture
 def app_state(monkeypatch):
@@ -663,3 +731,151 @@ def test_gamification_listener_exception_does_not_block_other_listeners(
     assert xp_earned > 0
     assert notifications == ["notified"]
     assert len(fake_db.attempts) == 1
+
+# ============================================================
+# MULTI-PLAYER STATE
+# ============================================================
+
+def test_initialization_loads_active_player_id(app_state):
+    state, fake_db = app_state
+
+    assert state.active_player_id == fake_db.active_player_id == 1
+
+
+def test_switch_player_loads_player_specific_progress(app_state):
+    state, fake_db = app_state
+
+    fake_db.profiles[2] = UserProfileData(
+        total_xp=250,
+        user_level=3,
+        current_streak=5,
+        last_practice_date="2026-11-24",
+    )
+    fake_db.badges_by_player[2] = {"tr_b1", "an_b2"}
+    fake_db.bosses[2] = HeroBossData(
+        consecutive_notes=7,
+        consecutive_chords=4,
+        consecutive_arpeggios=2,
+    )
+
+    assert state.switch_player(2) is True
+
+    assert state.active_player_id == 2
+    assert fake_db.active_player_id == 2
+
+    assert state.user_profile.total_xp == 250
+    assert state.user_profile.user_level == 3
+    assert state.user_profile.current_streak == 5
+
+    assert state.unlocked_badge_ids == {"tr_b1", "an_b2"}
+
+    assert state.hero_boss.consecutive_notes_under_2s == 7
+    assert state.hero_boss.consecutive_chords_under_2s == 4
+    assert state.hero_boss.consecutive_arpeggios_under_2s == 2
+
+
+def test_switching_players_notifies_listeners(app_state):
+    state, _ = app_state
+
+    view_notifications = []
+    gamification_notifications = []
+
+    state.subscribe_view(
+        lambda: view_notifications.append(True)
+    )
+    state.subscribe_gamification(
+        lambda: gamification_notifications.append(True)
+    )
+
+    assert state.switch_player(2) is True
+
+    assert len(view_notifications) == 1
+    assert len(gamification_notifications) == 1
+
+
+def test_switching_to_current_player_does_nothing(app_state):
+    state, fake_db = app_state
+
+    view_notifications = []
+    gamification_notifications = []
+
+    state.subscribe_view(
+        lambda: view_notifications.append(True)
+    )
+    state.subscribe_gamification(
+        lambda: gamification_notifications.append(True)
+    )
+
+    assert state.switch_player(1) is False
+
+    assert state.active_player_id == 1
+    assert fake_db.active_player_id == 1
+    assert view_notifications == []
+    assert gamification_notifications == []
+
+
+def test_invalid_player_switch_preserves_current_player(app_state):
+    state, fake_db = app_state
+
+    with pytest.raises(ValueError):
+        state.switch_player(999)
+
+    assert state.active_player_id == 1
+    assert fake_db.active_player_id == 1
+
+
+def test_attempt_progress_is_isolated_between_players(app_state):
+    state, fake_db = app_state
+
+    # Give Player 1 some existing progress.
+    fake_db.profiles[1].total_xp = 150
+    fake_db.profiles[1].current_streak = 4
+    fake_db.badges_by_player[1].add("an_b2")
+
+    # Switch to Player 2 and record an attempt.
+    state.switch_player(2)
+    xp_earned = state.record_attempt(
+        is_correct=True,
+        target_name="C",
+    )
+
+    assert xp_earned > 0
+
+    # Player 2 receives the new progress.
+    assert len(fake_db.attempts_by_player[2]) == 1
+    assert len(fake_db.profile_updates_by_player[2]) == 1
+    assert len(fake_db.boss_updates_by_player[2]) == 1
+    assert "tr_b1" in fake_db.badges_by_player[2]
+
+    # Player 1 remains unchanged.
+    assert fake_db.attempts_by_player[1] == []
+    assert fake_db.profile_updates_by_player[1] == []
+    assert fake_db.boss_updates_by_player[1] == []
+    assert fake_db.badges_by_player[1] == {"an_b2"}
+
+    assert fake_db.profiles[1].total_xp == 150
+    assert fake_db.profiles[1].current_streak == 4
+
+
+def test_switching_back_restores_previous_player_state(app_state):
+    state, fake_db = app_state
+
+    fake_db.profiles[1].total_xp = 150
+    fake_db.profiles[1].current_streak = 4
+    fake_db.badges_by_player[1] = {"an_b2"}
+
+    fake_db.profiles[2].total_xp = 300
+    fake_db.profiles[2].current_streak = 8
+    fake_db.badges_by_player[2] = {"tr_b1", "an_b3"}
+
+    state.switch_player(2)
+
+    assert state.user_profile.total_xp == 300
+    assert state.unlocked_badge_ids == {"tr_b1", "an_b3"}
+
+    state.switch_player(1)
+
+    assert state.active_player_id == 1
+    assert state.user_profile.total_xp == 150
+    assert state.user_profile.current_streak == 4
+    assert state.unlocked_badge_ids == {"an_b2"}
