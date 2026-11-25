@@ -2,7 +2,7 @@
 src/ui/components/header_nav.py
 ===============================
 In-line top header bar with persistent view feature icons,
-player selection, and modal triggers.
+player management, and modal triggers.
 """
 
 from typing import Callable
@@ -10,10 +10,11 @@ from typing import Callable
 import flet as ft
 
 from core.app_state import ActiveViewMode, AppState
+from ui.components.modals.player_modal import PlayerModal
 
 
 class HeaderNav(ft.Container):
-    """In-line header navigation with player selection and utility controls."""
+    """In-line header navigation with player management and utility controls."""
 
     def __init__(
         self,
@@ -47,34 +48,16 @@ class HeaderNav(ft.Container):
             "📊 Analytics", ActiveViewMode.ANALYTICS
         )
 
-        # Player selector
-        self.player_selector = ft.Dropdown(
-            value=str(self.app_state.active_player_id),
-            options=self._get_player_options(),
-            on_select=self._on_player_selected,
-            width=170,
-            text_size=13,
-            dense=True,
-            filled=True,
-            fill_color=ft.Colors.with_opacity(0.12, ft.Colors.WHITE),
-            border_color=ft.Colors.with_opacity(0.25, ft.Colors.WHITE),
-            focused_border_color=ft.Colors.CYAN_400,
-            color=ft.Colors.WHITE,
-            content_padding=10,
-            tooltip="Switch active player",
-        )
-
-        player_control = ft.Row(
-            controls=[
-                ft.Icon(
-                    ft.Icons.PERSON,
-                    color=ft.Colors.CYAN_300,
-                    size=20,
-                ),
-                self.player_selector,
-            ],
-            spacing=6,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        # Player management button
+        self.btn_players = ft.Button(
+            content=ft.Row(
+                controls=[
+                    ft.Icon(ft.Icons.GROUP, size=18),
+                    ft.Text("Players"),
+                ],
+                spacing=6,
+            ),
+            on_click=self._open_player_modal,
         )
 
         # Utility buttons
@@ -107,7 +90,9 @@ class HeaderNav(ft.Container):
                             src="logo.png",
                             width=28,
                             height=28,
-                            error_content=ft.Icon(ft.Icons.SPEAKER_GROUP),
+                            error_content=ft.Icon(
+                                ft.Icons.SPEAKER_GROUP
+                            ),
                         ),
                         ft.Text(
                             "BRAGI",
@@ -132,7 +117,7 @@ class HeaderNav(ft.Container):
                     spacing=4,
                 ),
                 ft.Container(expand=True),
-                player_control,
+                self.btn_players,
                 ft.Row(
                     controls=[
                         btn_filter,
@@ -147,43 +132,14 @@ class HeaderNav(ft.Container):
         )
 
         self._update_button_styles()
-
-        # Refresh header whenever application state changes.
         self.app_state.subscribe_view(self._on_view_changed)
 
-    def _get_player_options(self) -> list[ft.DropdownOption]:
-        """Build dropdown options from the database player records."""
-        players = self.app_state.db.get_players()
+    def _open_player_modal(self, e: ft.ControlEvent) -> None:
+        """Open the player management dialog."""
+        target_page = e.page or self.page
 
-        return [
-            ft.DropdownOption(
-                key=str(player.id),
-                text=player.name,
-            )
-            for player in players
-        ]
-
-    def _on_player_selected(self, e: ft.ControlEvent) -> None:
-        """Switch the active player when a dropdown option is selected."""
-        selected_value = e.control.value
-
-        if selected_value is None:
-            return
-
-        try:
-            player_id = int(selected_value)
-            self.app_state.switch_player(player_id)
-
-        except (ValueError, TypeError):
-            # Restore the actual active player if selection was invalid.
-            self._refresh_player_selector()
-
-    def _refresh_player_selector(self) -> None:
-        """Synchronize the selector with the current application state."""
-        self.player_selector.options = self._get_player_options()
-        self.player_selector.value = str(
-            self.app_state.active_player_id
-        )
+        if target_page is not None:
+            target_page.show_dialog(PlayerModal())
 
     def _make_nav_btn(
         self,
@@ -223,13 +179,10 @@ class HeaderNav(ft.Container):
             )
 
     def _on_view_changed(self) -> None:
-        """Refresh navigation and player selection after state changes."""
-        if self.page is None:
-            return
-
-        try:
-            self._update_button_styles()
-            self._refresh_player_selector()
-            self.update()
-        except Exception:
-            pass
+        """Refresh navigation when application state changes."""
+        if self.page is not None:
+            try:
+                self._update_button_styles()
+                self.update()
+            except Exception:
+                pass
