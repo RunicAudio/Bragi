@@ -61,19 +61,54 @@ class AppState:
 
         # Database and Gamification State
         self.db = DatabaseManager.get_instance()
-        self.user_profile: UserProfileData = self.db.get_user_profile()
-        self.unlocked_badge_ids: Set[str] = self.db.get_unlocked_badge_ids()
+        self.active_player_id: int = self.db.get_active_player_id()
 
-        boss_data = self.db.get_hero_boss_progress()
+        self._view_listeners: List[Callable[[], None]] = []
+        self._pitch_listeners: List[Callable[[], None]] = []
+        self._gamification_listeners: List[Callable[[], None]] = []
+
+        self._load_player_data()
+
+    def _load_player_data(self) -> None:
+        """Load profile and progression data for the active player."""
+        player_id = self.active_player_id
+
+        self.user_profile: UserProfileData = self.db.get_user_profile(
+            player_id=player_id
+        )
+        self.unlocked_badge_ids: Set[str] = self.db.get_unlocked_badge_ids(
+            player_id=player_id
+        )
+
+        boss_data = self.db.get_hero_boss_progress(player_id=player_id)
+
         self.hero_boss = HeroBossProgress(
             consecutive_notes_under_2s=boss_data.consecutive_notes,
             consecutive_chords_under_2s=boss_data.consecutive_chords,
             consecutive_arpeggios_under_2s=boss_data.consecutive_arpeggios,
         )
 
-        self._view_listeners: List[Callable[[], None]] = []
-        self._pitch_listeners: List[Callable[[], None]] = []
-        self._gamification_listeners: List[Callable[[], None]] = []
+    def switch_player(self, player_id: int) -> bool:
+        """
+        Switch the active player and reload their progression.
+
+        Returns True when the active player changes, otherwise False.
+        Raises ValueError if the requested player does not exist.
+        """
+        if player_id == self.active_player_id:
+            return False
+
+        # Validate and persist the selection before changing application state.
+        self.db.set_active_player_id(player_id)
+
+        self.active_player_id = player_id
+        self._load_player_data()
+
+        self.reset_target_timer()
+        self.notify_gamification_changed()
+        self.notify_view_changed()
+
+        return True
 
     @classmethod
     def get_instance(cls) -> "AppState":
@@ -167,6 +202,7 @@ class AppState:
             user_level=self.user_profile.user_level,
             current_streak=self.user_profile.current_streak,
             last_practice_date=today_str,
+            player_id=self.active_player_id,
         )
         self.db.log_attempt(
             view_mode=self.current_view.value,
@@ -175,6 +211,7 @@ class AppState:
             response_time_sec=response_time,
             is_correct=is_correct,
             xp_earned=xp_earned,
+            player_id=self.active_player_id,
         )
 
         # Update Hero Boss Progression (Trainer only)
@@ -198,6 +235,7 @@ class AppState:
                 notes=self.hero_boss.consecutive_notes_under_2s,
                 chords=self.hero_boss.consecutive_chords_under_2s,
                 arpeggios=self.hero_boss.consecutive_arpeggios_under_2s,
+                player_id=self.active_player_id,
             )
 
         # Evaluate Badge Unlocks
@@ -207,7 +245,9 @@ class AppState:
         return xp_earned
 
     def _evaluate_badges(self) -> None:
-        summary = self.db.get_analytics_summary()
+        summary = self.db.get_analytics_summary(
+            player_id=self.active_player_id
+        )
         total_attempts = summary.get("total_attempts", 0)
 
         badge_checks = {
@@ -222,5 +262,8 @@ class AppState:
 
         for badge_id, condition in badge_checks.items():
             if condition and badge_id not in self.unlocked_badge_ids:
-                if self.db.unlock_badge(badge_id):
+                if self.db.unlock_badge(
+                    badge_id,
+                    player_id=self.active_player_id,
+                ):
                     self.unlocked_badge_ids.add(badge_id)

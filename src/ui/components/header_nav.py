@@ -1,17 +1,19 @@
 """
 src/ui/components/header_nav.py
 ===============================
-In-line top header bar with persistent view feature icons and modal triggers.
+In-line top header bar with persistent view feature icons,
+player selection, and modal triggers.
 """
 
 from typing import Callable
+
 import flet as ft
 
 from core.app_state import ActiveViewMode, AppState
 
 
 class HeaderNav(ft.Container):
-    """In-line header navigation bar featuring icon buttons and modal action triggers."""
+    """In-line header navigation with player selection and utility controls."""
 
     def __init__(
         self,
@@ -20,6 +22,7 @@ class HeaderNav(ft.Container):
         on_open_timing: Callable[[ft.ControlEvent], None],
     ) -> None:
         super().__init__()
+
         self.app_state = AppState.get_instance()
 
         self.on_open_filter = on_open_filter
@@ -30,23 +33,65 @@ class HeaderNav(ft.Container):
         self.bgcolor = ft.Colors.with_opacity(0.85, "#1E1E2E")
         self.border_radius = 12
 
-        self.btn_trainer = self._make_nav_btn("🎯 Trainer", ActiveViewMode.TRAINER)
-        self.btn_tuner = self._make_nav_btn("🎛️ Tuner", ActiveViewMode.TUNER)
-        self.btn_ear = self._make_nav_btn("🎧 Ear Training", ActiveViewMode.EAR_TRAINING)
-        self.btn_analytics = self._make_nav_btn("📊 Analytics", ActiveViewMode.ANALYTICS)
+        # Navigation buttons
+        self.btn_trainer = self._make_nav_btn(
+            "🎯 Trainer", ActiveViewMode.TRAINER
+        )
+        self.btn_tuner = self._make_nav_btn(
+            "🎛️ Tuner", ActiveViewMode.TUNER
+        )
+        self.btn_ear = self._make_nav_btn(
+            "🎧 Ear Training", ActiveViewMode.EAR_TRAINING
+        )
+        self.btn_analytics = self._make_nav_btn(
+            "📊 Analytics", ActiveViewMode.ANALYTICS
+        )
 
+        # Player selector
+        self.player_selector = ft.Dropdown(
+            value=str(self.app_state.active_player_id),
+            options=self._get_player_options(),
+            on_select=self._on_player_selected,
+            width=170,
+            text_size=13,
+            dense=True,
+            filled=True,
+            fill_color=ft.Colors.with_opacity(0.12, ft.Colors.WHITE),
+            border_color=ft.Colors.with_opacity(0.25, ft.Colors.WHITE),
+            focused_border_color=ft.Colors.CYAN_400,
+            color=ft.Colors.WHITE,
+            content_padding=10,
+            tooltip="Switch active player",
+        )
+
+        player_control = ft.Row(
+            controls=[
+                ft.Icon(
+                    ft.Icons.PERSON,
+                    color=ft.Colors.CYAN_300,
+                    size=20,
+                ),
+                self.player_selector,
+            ],
+            spacing=6,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+        # Utility buttons
         btn_filter = ft.IconButton(
             icon=ft.Icons.TUNE,
             icon_color=ft.Colors.CYAN_300,
             tooltip="Practice Filters & Modes",
             on_click=lambda e: self.on_open_filter(e),
         )
+
         btn_instrument = ft.IconButton(
             icon=ft.Icons.MIC,
             icon_color=ft.Colors.AMBER_300,
             tooltip="Audio Device & Input Setup",
             on_click=lambda e: self.on_open_instrument(e),
         )
+
         btn_timing = ft.IconButton(
             icon=ft.Icons.TIMER,
             icon_color=ft.Colors.GREEN_300,
@@ -58,19 +103,42 @@ class HeaderNav(ft.Container):
             controls=[
                 ft.Row(
                     controls=[
-                        ft.Image(src="logo.png", width=28, height=28, error_content=ft.Icon(ft.Icons.SPEAKER_GROUP)),
-                        ft.Text("BRAGI", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE),
+                        ft.Image(
+                            src="logo.png",
+                            width=28,
+                            height=28,
+                            error_content=ft.Icon(ft.Icons.SPEAKER_GROUP),
+                        ),
+                        ft.Text(
+                            "BRAGI",
+                            size=20,
+                            weight=ft.FontWeight.BOLD,
+                            color=ft.Colors.WHITE,
+                        ),
                     ],
                     spacing=8,
                 ),
-                ft.VerticalDivider(width=1, color=ft.Colors.with_opacity(0.24, ft.Colors.WHITE)),
+                ft.VerticalDivider(
+                    width=1,
+                    color=ft.Colors.with_opacity(0.24, ft.Colors.WHITE),
+                ),
                 ft.Row(
-                    controls=[self.btn_trainer, self.btn_tuner, self.btn_ear, self.btn_analytics],
+                    controls=[
+                        self.btn_trainer,
+                        self.btn_tuner,
+                        self.btn_ear,
+                        self.btn_analytics,
+                    ],
                     spacing=4,
                 ),
                 ft.Container(expand=True),
+                player_control,
                 ft.Row(
-                    controls=[btn_filter, btn_instrument, btn_timing],
+                    controls=[
+                        btn_filter,
+                        btn_instrument,
+                        btn_timing,
+                    ],
                     spacing=4,
                 ),
             ],
@@ -79,9 +147,49 @@ class HeaderNav(ft.Container):
         )
 
         self._update_button_styles()
+
+        # Refresh header whenever application state changes.
         self.app_state.subscribe_view(self._on_view_changed)
 
-    def _make_nav_btn(self, label: str, view_mode: ActiveViewMode) -> ft.Control:
+    def _get_player_options(self) -> list[ft.DropdownOption]:
+        """Build dropdown options from the database player records."""
+        players = self.app_state.db.get_players()
+
+        return [
+            ft.DropdownOption(
+                key=str(player.id),
+                text=player.name,
+            )
+            for player in players
+        ]
+
+    def _on_player_selected(self, e: ft.ControlEvent) -> None:
+        """Switch the active player when a dropdown option is selected."""
+        selected_value = e.control.value
+
+        if selected_value is None:
+            return
+
+        try:
+            player_id = int(selected_value)
+            self.app_state.switch_player(player_id)
+
+        except (ValueError, TypeError):
+            # Restore the actual active player if selection was invalid.
+            self._refresh_player_selector()
+
+    def _refresh_player_selector(self) -> None:
+        """Synchronize the selector with the current application state."""
+        self.player_selector.options = self._get_player_options()
+        self.player_selector.value = str(
+            self.app_state.active_player_id
+        )
+
+    def _make_nav_btn(
+        self,
+        label: str,
+        view_mode: ActiveViewMode,
+    ) -> ft.Control:
         return ft.Button(
             content=ft.Text(label),
             on_click=lambda _: self.app_state.set_view(view_mode),
@@ -89,24 +197,39 @@ class HeaderNav(ft.Container):
 
     def _update_button_styles(self) -> None:
         curr = self.app_state.current_view
+
         btns = [
             (self.btn_trainer, ActiveViewMode.TRAINER),
             (self.btn_tuner, ActiveViewMode.TUNER),
             (self.btn_ear, ActiveViewMode.EAR_TRAINING),
             (self.btn_analytics, ActiveViewMode.ANALYTICS),
         ]
+
         for btn, mode in btns:
-            is_active = (mode == curr)
+            is_active = mode == curr
+
             btn.style = ft.ButtonStyle(
-                color=ft.Colors.CYAN_400 if is_active else ft.Colors.with_opacity(0.7, ft.Colors.WHITE),
-                bgcolor=ft.Colors.with_opacity(0.2, ft.Colors.CYAN_700) if is_active else ft.Colors.TRANSPARENT,
+                color=(
+                    ft.Colors.CYAN_400
+                    if is_active
+                    else ft.Colors.with_opacity(0.7, ft.Colors.WHITE)
+                ),
+                bgcolor=(
+                    ft.Colors.with_opacity(0.2, ft.Colors.CYAN_700)
+                    if is_active
+                    else ft.Colors.TRANSPARENT
+                ),
                 shape=ft.RoundedRectangleBorder(radius=8),
             )
 
     def _on_view_changed(self) -> None:
-        if self.page is not None:
-            try:
-                self._update_button_styles()
-                self.update()
-            except Exception:
-                pass
+        """Refresh navigation and player selection after state changes."""
+        if self.page is None:
+            return
+
+        try:
+            self._update_button_styles()
+            self._refresh_player_selector()
+            self.update()
+        except Exception:
+            pass
