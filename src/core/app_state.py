@@ -93,6 +93,10 @@ class AppState:
         if listener not in self._gamification_listeners:
             self._gamification_listeners.append(listener)
 
+    def add_gamification_listener(self, listener: Callable[[], None]) -> None:
+        """Register a listener for gamification state changes."""
+        self.subscribe_gamification(listener)
+
     def notify_view_changed(self) -> None:
         for listener in list(self._view_listeners):
             try:
