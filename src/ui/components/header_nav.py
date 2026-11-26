@@ -19,6 +19,7 @@ class HeaderNav(ft.Container):
     def __init__(
         self,
         on_open_filter: Callable[[ft.ControlEvent], None],
+        on_open_device: Callable[[ft.ControlEvent], None],
         on_open_instrument: Callable[[ft.ControlEvent], None],
         on_open_timing: Callable[[ft.ControlEvent], None],
     ) -> None:
@@ -27,6 +28,7 @@ class HeaderNav(ft.Container):
         self.app_state = AppState.get_instance()
 
         self.on_open_filter = on_open_filter
+        self.on_open_device = on_open_device
         self.on_open_instrument = on_open_instrument
         self.on_open_timing = on_open_timing
 
@@ -69,10 +71,17 @@ class HeaderNav(ft.Container):
         )
 
         btn_instrument = ft.IconButton(
-            icon=ft.Icons.MIC,
+            icon=ft.Icons.MUSIC_NOTE,
             icon_color=ft.Colors.AMBER_300,
-            tooltip="Audio Device & Input Setup",
+            tooltip="Instrument & Tuning Configuration",
             on_click=lambda e: self.on_open_instrument(e),
+        )
+
+        btn_audio = ft.IconButton(
+            icon=ft.Icons.MIC,
+            icon_color=ft.Colors.CYAN_300,
+            tooltip="Audio Device & Input Setup",
+            on_click=lambda e: self.on_open_device(e),
         )
 
         btn_timing = ft.IconButton(
@@ -122,6 +131,7 @@ class HeaderNav(ft.Container):
                     controls=[
                         btn_filter,
                         btn_instrument,
+                        btn_audio,
                         btn_timing,
                     ],
                     spacing=4,

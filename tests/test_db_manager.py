@@ -8,6 +8,13 @@ from storage.db_manager import (
     UserProfileData,
 )
 
+from domain.instrument_definitions import (
+    InstrumentConfiguration,
+    InstrumentType,
+    TuningString,
+    get_standard_configuration,
+)
+
 
 @pytest.fixture
 def db(tmp_path, monkeypatch):
@@ -19,6 +26,22 @@ def db(tmp_path, monkeypatch):
     )
     return DatabaseManager()
 
+def make_drop_d_configuration():
+    """Create a six-string Drop D guitar configuration."""
+
+    return InstrumentConfiguration(
+        instrument_type=InstrumentType.GUITAR,
+        string_count=6,
+        tuning_name="Drop D",
+        strings=(
+            TuningString(6, "D", 2),
+            TuningString(5, "A", 2),
+            TuningString(4, "D", 3),
+            TuningString(3, "G", 3),
+            TuningString(2, "B", 3),
+            TuningString(1, "E", 4),
+        ),
+    )
 
 # ============================================================
 # INITIALIZATION
@@ -511,6 +534,9 @@ def test_reset_player_progress_only_resets_selected_player(db):
     db.update_hero_boss_progress(10, 20, 30, player_id=1)
     db.update_hero_boss_progress(5, 6, 7, player_id=player_2)
 
+    drop_d = make_drop_d_configuration()
+    db.save_instrument_configuration(drop_d, player_id=1)
+
     db.reset_player_progress(1)
 
     assert db.get_user_profile(1).total_xp == 0
@@ -522,6 +548,100 @@ def test_reset_player_progress_only_resets_selected_player(db):
     assert db.get_analytics_summary(player_2)["total_attempts"] == 1
     assert "tr_b1" in db.get_unlocked_badge_ids(player_2)
     assert db.get_hero_boss_progress(player_2).consecutive_notes == 5
+
+    assert db.get_instrument_configuration(1) == drop_d
+
+# ============================================================
+# INSTRUMENT CONFIGURATION
+# ============================================================
+
+def test_default_player_receives_standard_guitar_configuration(db):
+    configuration = db.get_instrument_configuration(1)
+
+    expected = get_standard_configuration(InstrumentType.GUITAR)
+
+    assert configuration == expected
+    assert configuration.tuning_name == "Standard"
+    assert configuration.string_count == 6
+
+
+def test_new_player_receives_standard_guitar_configuration(db):
+    player_id = db.create_player("Alex")
+
+    configuration = db.get_instrument_configuration(player_id)
+
+    assert configuration == get_standard_configuration(
+        InstrumentType.GUITAR
+    )
+
+
+def test_custom_instrument_configuration_persists(db):
+    configuration = make_drop_d_configuration()
+
+    db.save_instrument_configuration(configuration, player_id=1)
+
+    retrieved = db.get_instrument_configuration(player_id=1)
+
+    assert retrieved == configuration
+    assert retrieved.tuning_name == "Drop D"
+    assert retrieved.get_string(6).note_name == "D2"
+
+
+def test_instrument_configurations_are_player_scoped(db):
+    player_2 = db.create_player("Alex")
+
+    drop_d = make_drop_d_configuration()
+    bass = get_standard_configuration(InstrumentType.BASS)
+
+    db.save_instrument_configuration(drop_d, player_id=1)
+    db.save_instrument_configuration(bass, player_id=player_2)
+
+    assert db.get_instrument_configuration(1) == drop_d
+    assert db.get_instrument_configuration(player_2) == bass
+
+
+def test_instrument_configuration_uses_active_player_by_default(db):
+    player_2 = db.create_player("Alex")
+    configuration = get_standard_configuration(InstrumentType.BASS)
+
+    db.save_instrument_configuration(configuration)
+
+    assert db.get_instrument_configuration() == configuration
+    assert db.get_instrument_configuration(1).instrument_type == (
+        InstrumentType.GUITAR
+    )
+    assert db.get_instrument_configuration(player_2) == configuration
+
+
+def test_instrument_configuration_survives_database_reinitialization(db):
+    configuration = make_drop_d_configuration()
+
+    db.save_instrument_configuration(configuration, player_id=1)
+
+    db._init_db()
+
+    assert db.get_instrument_configuration(1) == configuration
+
+
+def test_instrument_configuration_rejects_non_configuration(db):
+    with pytest.raises(TypeError):
+        db.save_instrument_configuration(
+            {"instrument": "Guitar"},
+            player_id=1,
+        )
+
+
+def test_instrument_configuration_rejects_nonexistent_player(db):
+    configuration = make_drop_d_configuration()
+
+    with pytest.raises(ValueError):
+        db.save_instrument_configuration(
+            configuration,
+            player_id=9999,
+        )
+
+    with pytest.raises(ValueError):
+        db.get_instrument_configuration(player_id=9999)
 
 def test_legacy_database_migrates_all_data_to_player_one(
     tmp_path, monkeypatch
@@ -660,7 +780,16 @@ def test_legacy_database_migrates_all_data_to_player_one(
             "PRAGMA user_version"
         ).fetchone()[0]
 
-        assert version == 1
+        assert version == 2
+        instrument_row = conn.execute(
+            """
+            SELECT configuration_json
+            FROM player_instrument_configurations
+            WHERE player_id = 1
+            """
+        ).fetchone()
+
+        assert instrument_row is not None
 
         # Verify temporary legacy tables were removed.
         tables = {

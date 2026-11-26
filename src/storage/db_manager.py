@@ -4,6 +4,13 @@ src/storage/db_manager.py
 Thread-safe SQLite database manager for multi-player analytics,
 practice logs, badge unlocks, and Hero Boss progression.
 """
+import json
+
+from domain.instrument_definitions import (
+    InstrumentConfiguration,
+    InstrumentType,
+    get_standard_configuration,
+)
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -75,9 +82,12 @@ class DatabaseManager:
             if version < 1:
                 self._migrate_to_multi_player(conn)
 
+            if version < 2:
+                self._migrate_to_instrument_configurations(conn)
+
             self._create_missing_rows(conn)
 
-            conn.execute("PRAGMA user_version = 1")
+            conn.execute("PRAGMA user_version = 2")
             conn.commit()
 
     def _migrate_to_multi_player(self, conn: sqlite3.Connection) -> None:
@@ -205,6 +215,47 @@ class DatabaseManager:
             if legacy in existing_tables:
                 conn.execute(f"DROP TABLE {legacy}")
 
+    def _migrate_to_instrument_configurations(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        """Add persistent instrument configurations for every player."""
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS player_instrument_configurations (
+                player_id INTEGER PRIMARY KEY,
+                configuration_json TEXT NOT NULL,
+                FOREIGN KEY (player_id)
+                    REFERENCES players(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        default_configuration = get_standard_configuration(
+            InstrumentType.GUITAR
+        )
+
+        configuration_json = json.dumps(
+            default_configuration.to_dict()
+        )
+
+        players = conn.execute(
+            "SELECT id FROM players"
+        ).fetchall()
+
+        for player in players:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO player_instrument_configurations (
+                    player_id,
+                    configuration_json
+                )
+                VALUES (?, ?)
+                """,
+                (player["id"], configuration_json),
+            )
+
     def _create_schema(self, conn: sqlite3.Connection) -> None:
         """Create the multi-player schema within the caller's transaction."""
 
@@ -276,6 +327,7 @@ class DatabaseManager:
 
         for statement in statements:
             conn.execute(statement)
+
     def _create_missing_rows(self, conn: sqlite3.Connection) -> None:
         """Ensure every player has profile and Hero Boss records."""
 
@@ -306,6 +358,24 @@ class DatabaseManager:
                 VALUES (?)
                 """,
                 (player_id,),
+            )
+
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO player_instrument_configurations (
+                    player_id,
+                    configuration_json
+                )
+                VALUES (?, ?)
+                """,
+                (
+                    player_id,
+                    json.dumps(
+                        get_standard_configuration(
+                            InstrumentType.GUITAR
+                        ).to_dict()
+                    ),
+                ),
             )
 
         conn.execute(
@@ -385,6 +455,24 @@ class DatabaseManager:
                 (player_id,),
             )
 
+            default_configuration = get_standard_configuration(
+                InstrumentType.GUITAR
+            )
+
+            conn.execute(
+                """
+                INSERT INTO player_instrument_configurations (
+                    player_id,
+                    configuration_json
+                )
+                VALUES (?, ?)
+                """,
+                (
+                    player_id,
+                    json.dumps(default_configuration.to_dict()),
+                ),
+            )
+
             conn.execute(
                 """
                 UPDATE app_settings
@@ -443,6 +531,86 @@ class DatabaseManager:
         return resolved
 
     # ============================================================
+    # INSTRUMENT CONFIGURATION
+    # ============================================================
+
+    def get_instrument_configuration(
+        self,
+        player_id: Optional[int] = None,
+    ) -> InstrumentConfiguration:
+        """Return the saved instrument configuration for a player."""
+
+        resolved_player_id = self._resolve_player_id(player_id)
+
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT configuration_json
+                FROM player_instrument_configurations
+                WHERE player_id = ?
+                """,
+                (resolved_player_id,),
+            ).fetchone()
+
+            if row is None:
+                configuration = get_standard_configuration(
+                    InstrumentType.GUITAR
+                )
+
+                conn.execute(
+                    """
+                    INSERT INTO player_instrument_configurations (
+                        player_id,
+                        configuration_json
+                    )
+                    VALUES (?, ?)
+                    """,
+                    (
+                        resolved_player_id,
+                        json.dumps(configuration.to_dict()),
+                    ),
+                )
+
+                conn.commit()
+                return configuration
+
+            data = json.loads(row["configuration_json"])
+            return InstrumentConfiguration.from_dict(data)
+
+    def save_instrument_configuration(
+        self,
+        configuration: InstrumentConfiguration,
+        player_id: Optional[int] = None,
+    ) -> None:
+        """Save an instrument configuration for a specific player."""
+
+        if not isinstance(configuration, InstrumentConfiguration):
+            raise TypeError(
+                "configuration must be an InstrumentConfiguration."
+            )
+
+        resolved_player_id = self._resolve_player_id(player_id)
+
+        configuration_json = json.dumps(configuration.to_dict())
+
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO player_instrument_configurations (
+                    player_id,
+                    configuration_json
+                )
+                VALUES (?, ?)
+                ON CONFLICT(player_id)
+                DO UPDATE SET
+                    configuration_json = excluded.configuration_json
+                """,
+                (resolved_player_id, configuration_json),
+            )
+
+            conn.commit()
+
+    # ============================================================
     # PROFILE AND XP OPERATIONS
     # ============================================================
 
@@ -456,7 +624,7 @@ class DatabaseManager:
             row = conn.execute(
                 """
                 SELECT total_xp, user_level,
-                       current_streak, last_practice_date
+                current_streak, last_practice_date
                 FROM user_profile
                 WHERE player_id = ?
                 """,
@@ -657,8 +825,8 @@ class DatabaseManager:
             row = conn.execute(
                 """
                 SELECT consecutive_notes,
-                       consecutive_chords,
-                       consecutive_arpeggios
+                    consecutive_chords,
+                    consecutive_arpeggios
                 FROM hero_boss_progress
                 WHERE player_id = ?
                 """,

@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, Optional, Set
 from pydantic import BaseModel
 
 from domain.gamification_policy import SYSTEM_BADGES, GamificationPolicy, HeroBossProgress
+from domain.instrument_definitions import InstrumentConfiguration
 from storage.db_manager import DatabaseManager, UserProfileData
 
 
@@ -73,6 +74,11 @@ class AppState:
         """Load profile and progression data for the active player."""
         player_id = self.active_player_id
 
+        self.instrument_configuration: InstrumentConfiguration = (
+            self.db.get_instrument_configuration(player_id=player_id
+        )
+)
+
         self.user_profile: UserProfileData = self.db.get_user_profile(
             player_id=player_id
         )
@@ -87,6 +93,26 @@ class AppState:
             consecutive_chords_under_2s=boss_data.consecutive_chords,
             consecutive_arpeggios_under_2s=boss_data.consecutive_arpeggios,
         )
+
+    def set_instrument_configuration(
+        self,
+        configuration: InstrumentConfiguration,
+    ) -> None:
+        """Save and activate an instrument configuration for the active player."""
+
+        if not isinstance(configuration, InstrumentConfiguration):
+            raise TypeError(
+                "configuration must be an InstrumentConfiguration."
+            )
+
+        self.db.save_instrument_configuration(
+            configuration,
+            player_id=self.active_player_id,
+        )
+
+        self.instrument_configuration = configuration
+        self.reset_target_timer()
+        self.notify_view_changed()
 
     def switch_player(self, player_id: int) -> bool:
         """

@@ -12,6 +12,7 @@ from ui.components.header_nav import HeaderNav
 from ui.components.modals.device_modal import DeviceModal
 from ui.components.modals.filter_modal import FilterModal
 from ui.components.modals.timing_modal import TimingModal
+from ui.components.modals.instrument_modal import InstrumentModal
 
 
 class AppShell(ft.Stack):
@@ -26,7 +27,8 @@ class AppShell(ft.Stack):
 
         self.header_nav = HeaderNav(
             on_open_filter=self._open_filter_modal,
-            on_open_instrument=self._open_device_modal,
+            on_open_device=self._open_device_modal,
+            on_open_instrument=self._open_instrument_modal,
             on_open_timing=self._open_timing_modal,
         )
 
@@ -80,6 +82,10 @@ class AppShell(ft.Stack):
         except Exception:
             import traceback
             traceback.print_exc()
+
+    def _open_instrument_modal(self, e: ft.ControlEvent) -> None:
+        """Open instrument and tuning configuration."""
+        self._open_modal(InstrumentModal(), e)
 
     def _open_timing_modal(self, e: ft.ControlEvent) -> None:
         self._open_modal(TimingModal(), e)

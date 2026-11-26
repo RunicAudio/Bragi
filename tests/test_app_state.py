@@ -7,10 +7,18 @@ from core.app_state import (
     TrainerSubMode,
 )
 from domain.gamification_policy import HeroBossProgress
+
 from storage.db_manager import (
     DatabaseManager,
     HeroBossData,
     UserProfileData,
+)
+
+from domain.instrument_definitions import (
+    InstrumentConfiguration,
+    InstrumentType,
+    TuningString,
+    get_standard_configuration,
 )
 
 
@@ -34,6 +42,11 @@ class FakeDatabase:
         self.attempts_by_player = {
             1: [],
             2: [],
+        }
+
+        self.instrument_configurations = {
+            1: get_standard_configuration(InstrumentType.GUITAR),
+            2: get_standard_configuration(InstrumentType.GUITAR),
         }
 
         # Legacy test histories retained for existing tests.
@@ -70,6 +83,19 @@ class FakeDatabase:
             raise ValueError(f"Player {player_id} does not exist.")
 
         self.active_player_id = player_id
+
+        # Instrument configuration.
+    def get_instrument_configuration(self, player_id=None):
+        player_id = player_id or self.active_player_id
+        return self.instrument_configurations[player_id]
+
+    def save_instrument_configuration(
+        self,
+        configuration,
+        player_id=None,
+    ):
+        player_id = player_id or self.active_player_id
+        self.instrument_configurations[player_id] = configuration
 
     # Profile.
     def get_user_profile(self, player_id=None):
@@ -166,6 +192,22 @@ def app_state(monkeypatch):
 
     return state, fake_db
 
+def make_drop_d_configuration():
+    """Create a six-string Drop D guitar configuration."""
+
+    return InstrumentConfiguration(
+        instrument_type=InstrumentType.GUITAR,
+        string_count=6,
+        tuning_name="Drop D",
+        strings=(
+            TuningString(6, "D", 2),
+            TuningString(5, "A", 2),
+            TuningString(4, "D", 3),
+            TuningString(3, "G", 3),
+            TuningString(2, "B", 3),
+            TuningString(1, "E", 4),
+        ),
+    )
 
 # ============================================================
 # INITIALIZATION
@@ -879,3 +921,87 @@ def test_switching_back_restores_previous_player_state(app_state):
     assert state.user_profile.total_xp == 150
     assert state.user_profile.current_streak == 4
     assert state.unlocked_badge_ids == {"an_b2"}
+
+def test_initialization_loads_default_instrument_configuration(app_state):
+    state, fake_db = app_state
+
+    expected = get_standard_configuration(InstrumentType.GUITAR)
+
+    assert state.instrument_configuration == expected
+    assert fake_db.instrument_configurations[1] == expected
+
+
+def test_set_instrument_configuration_persists_for_active_player(app_state):
+    state, fake_db = app_state
+    configuration = make_drop_d_configuration()
+
+    state.set_instrument_configuration(configuration)
+
+    assert state.instrument_configuration == configuration
+    assert fake_db.instrument_configurations[1] == configuration
+
+
+def test_instrument_configuration_is_player_scoped(app_state):
+    state, fake_db = app_state
+    configuration = make_drop_d_configuration()
+
+    state.set_instrument_configuration(configuration)
+
+    state.switch_player(2)
+
+    player_two_default = get_standard_configuration(
+        InstrumentType.GUITAR
+    )
+
+    assert state.instrument_configuration == player_two_default
+    assert fake_db.instrument_configurations[1] == configuration
+    assert fake_db.instrument_configurations[2] == player_two_default
+
+
+def test_switch_player_loads_player_specific_instrument_configuration(
+    app_state,
+):
+    state, fake_db = app_state
+
+    configuration = make_drop_d_configuration()
+    fake_db.instrument_configurations[2] = configuration
+
+    assert state.switch_player(2) is True
+    assert state.instrument_configuration == configuration
+
+
+def test_switching_back_restores_previous_instrument_configuration(
+    app_state,
+):
+    state, fake_db = app_state
+
+    player_one_configuration = make_drop_d_configuration()
+    player_two_configuration = get_standard_configuration(
+        InstrumentType.BASS
+    )
+
+    state.set_instrument_configuration(player_one_configuration)
+    state.switch_player(2)
+
+    state.set_instrument_configuration(player_two_configuration)
+    state.switch_player(1)
+
+    assert state.instrument_configuration == player_one_configuration
+
+    state.switch_player(2)
+
+    assert state.instrument_configuration == player_two_configuration
+
+
+def test_set_instrument_configuration_rejects_invalid_type(app_state):
+    state, fake_db = app_state
+    original_configuration = state.instrument_configuration
+
+    with pytest.raises(TypeError):
+        state.set_instrument_configuration("Drop D")
+
+    assert state.instrument_configuration == original_configuration
+    assert (
+        fake_db.instrument_configurations[1]
+        == original_configuration
+    )
