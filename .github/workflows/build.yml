@@ -1,49 +1,84 @@
-name: Build and Release Linux App
+name: Build and Release Bragi
 
 on:
   push:
     tags:
-      - "v*.*.*"
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
-  build-linux:
-    name: Build Linux Executable
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+  build-windows:
+    name: Build Windows beta packages
+    runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out tagged source
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
+          cache: "pip"
 
-      - name: Install Linux Audio Dependencies
+      - name: Read and validate release version
+        id: version
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev portaudio19-dev
+          $projectVersion = python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          $tag = "${{ github.ref_name }}"
+          $tagVersion = $tag -replace '^v', '' -replace '[-+].*$', ''
+          if ($tagVersion -ne $projectVersion) {
+            throw "Tag version ($tagVersion) does not match pyproject.toml ($projectVersion)."
+          }
+          "version=$projectVersion" >> $env:GITHUB_OUTPUT
 
-      - name: Install Dependencies
+      - name: Install project and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flet pyinstaller
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          python -m pip install -e .
+          python -m pip install "flet==1.0.4" pytest
 
-      - name: Build Executable
+      - name: Run test suite
+        run: python -m pytest -q
+
+      - name: Build Windows application
+        shell: pwsh
         run: |
-          pyinstaller --noconfirm --onedir --windowed --name Bragi --paths src --add-data "assets:assets" main.py
+          flet build windows --artifact Bragi --build-version "${{ steps.version.outputs.version }}" --build-number "${{ github.run_number }}"
+          if (-not (Test-Path "build/windows/Bragi.exe")) {
+            Get-ChildItem build/windows -Recurse | Select-Object FullName
+            throw "Expected build/windows/Bragi.exe was not produced."
+          }
 
-      - name: Compress Release
+      - name: Build Windows installer
+        shell: pwsh
         run: |
-          cd dist
-          tar -czvf Bragi-Linux.tar.gz Bragi
+          iscc "/DAppVersion=${{ steps.version.outputs.version }}" installer.iss
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed with exit code $LASTEXITCODE."
+          }
 
-      - name: Upload Linux Release
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $zipPath = "build/Bragi-$version-Windows-x64.zip"
+          Compress-Archive -Path "build/windows/*" -DestinationPath $zipPath -CompressionLevel Optimal -Force
+          if (-not (Test-Path $zipPath)) {
+            throw "Portable ZIP was not created."
+          }
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
         with:
+          name: Bragi v${{ github.ref_name }}
           generate_release_notes: true
-          files: dist/Bragi-Linux.tar.gz
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            build/installer/Bragi-${{ steps.version.outputs.version }}-setup.exe
+            build/Bragi-${{ steps.version.outputs.version }}-Windows-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
