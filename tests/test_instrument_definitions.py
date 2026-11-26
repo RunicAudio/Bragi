@@ -449,3 +449,78 @@ def test_from_dict_rejects_missing_fields():
             "instrument_type": "Guitar",
             "string_count": 6,
         })
+
+# ---------------------------------------------------------------------------
+# Fret count
+# ---------------------------------------------------------------------------
+
+def test_standard_instruments_default_to_22_frets():
+    for instrument in InstrumentType:
+        config = get_standard_configuration(instrument)
+        assert config.fret_count == 22
+
+
+@pytest.mark.parametrize("fret_count", [19, 22, 24, 27])
+def test_custom_configuration_supports_different_fret_counts(fret_count):
+    config = create_custom_configuration(
+        InstrumentType.GUITAR,
+        [
+            TuningString(1, "E", 4),
+        ],
+        fret_count=fret_count,
+    )
+
+    assert config.fret_count == fret_count
+
+
+def test_configuration_rejects_invalid_fret_count():
+    with pytest.raises(ValueError):
+        InstrumentConfiguration(
+            instrument_type=InstrumentType.GUITAR,
+            string_count=1,
+            tuning_name="Custom",
+            strings=(TuningString(1, "E", 4),),
+            fret_count=0,
+        )
+
+
+def test_configuration_rejects_boolean_fret_count():
+    with pytest.raises(ValueError):
+        InstrumentConfiguration(
+            instrument_type=InstrumentType.GUITAR,
+            string_count=1,
+            tuning_name="Custom",
+            strings=(TuningString(1, "E", 4),),
+            fret_count=True,
+        )
+
+
+def test_old_configuration_data_defaults_to_22_frets():
+    old_data = {
+        "instrument_type": "Guitar",
+        "string_count": 1,
+        "tuning_name": "Custom",
+        "strings": [
+            {
+                "string_number": 1,
+                "note": "E",
+                "octave": 4,
+            }
+        ],
+    }
+
+    config = InstrumentConfiguration.from_dict(old_data)
+
+    assert config.fret_count == 22
+
+
+def test_serialization_preserves_custom_fret_count():
+    original = create_custom_configuration(
+        InstrumentType.GUITAR,
+        [TuningString(1, "E", 4)],
+        fret_count=24,
+    )
+
+    restored = InstrumentConfiguration.from_dict(original.to_dict())
+
+    assert restored.fret_count == 24

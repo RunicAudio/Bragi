@@ -22,11 +22,21 @@ class TunerView(ft.Container):
         self.txt_note = ft.Text("--", size=72, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE)
         self.txt_cents = ft.Text("--", size=20, color=ft.Colors.with_opacity(0.9, ft.Colors.WHITE))
         self.txt_status = ft.Text("PLAY A STRING", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE)
+
         self.needle_container = ft.Container(
             alignment=ft.Alignment(0, 0),
-            content=ft.Container(width=6, height=36, bgcolor=ft.Colors.WHITE, border_radius=3),
+            animate=ft.Animation(
+                100,
+                ft.AnimationCurve.EASE_OUT,
+            ),
+            content=ft.Container(
+                width=6,
+                height=36,
+                bgcolor=ft.Colors.WHITE,
+                border_radius=3,
+            ),
         )
-
+        
         self.gauge_container = ft.Container(
             content=ft.Column(
                 controls=[

@@ -152,6 +152,7 @@ class InstrumentConfiguration:
     string_count: int
     tuning_name: str
     strings: tuple[TuningString, ...]
+    fret_count: int = 22
 
     def __post_init__(self) -> None:
         # Allow construction using either an enum or its string value.
@@ -175,6 +176,13 @@ class InstrumentConfiguration:
                 f"String count must be between "
                 f"{MIN_STRING_COUNT} and {MAX_STRING_COUNT}."
             )
+
+        if (
+            not isinstance(self.fret_count, int)
+            or isinstance(self.fret_count, bool)
+            or self.fret_count < 1
+        ):
+            raise ValueError("Fret count must be a positive integer.")
 
         if not isinstance(self.tuning_name, str) or not self.tuning_name.strip():
             raise ValueError("Tuning name cannot be empty.")
@@ -253,6 +261,7 @@ class InstrumentConfiguration:
                 }
                 for string in self.strings
             ],
+            "fret_count": self.fret_count,
         }
 
     @classmethod
@@ -289,6 +298,7 @@ class InstrumentConfiguration:
         return cls(
             instrument_type=InstrumentType(data["instrument_type"]),
             string_count=data["string_count"],
+            fret_count=data.get("fret_count", 22),
             tuning_name=data["tuning_name"],
             strings=strings,
         )
@@ -405,6 +415,7 @@ def get_available_instruments() -> tuple[str, ...]:
 def create_custom_configuration(
     instrument_type: InstrumentType | str,
     strings: tuple[TuningString, ...] | list[TuningString],
+    fret_count: int = 22,
 ) -> InstrumentConfiguration:
     """
     Create a custom tuning configuration.
@@ -427,4 +438,5 @@ def create_custom_configuration(
         string_count=len(strings),
         tuning_name="Custom",
         strings=strings,
+        fret_count=fret_count,
     )

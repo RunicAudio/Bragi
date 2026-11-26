@@ -111,12 +111,14 @@ class PitchTracker:
         freq = float(self.sample_rate) / refined_lag
 
         note_name, pitch_class, cents = MusicTheory.frequency_to_note_info(freq)
+        midi_number = MusicTheory.frequency_to_midi_number(freq)
         is_in_tune = abs(cents) <= 10.0
 
         return LivePitch(
             frequency=float(freq),
             note_name=note_name,
             pitch_class=pitch_class,
+            midi_number=midi_number if midi_number is not None else -1,
             cents_deviation=float(cents),
             is_in_tune=is_in_tune,
             is_silent=False,

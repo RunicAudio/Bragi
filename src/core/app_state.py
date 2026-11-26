@@ -35,6 +35,7 @@ class LivePitch(BaseModel):
     frequency: float = 0.0
     note_name: str = "--"
     pitch_class: int = -1
+    midi_number: int = -1
     cents_deviation: float = 0.0
     is_in_tune: bool = False
     is_silent: bool = True
@@ -50,7 +51,8 @@ class AppState:
         self.current_view: ActiveViewMode = ActiveViewMode.HOME
         self.trainer_mode: TrainerSubMode = TrainerSubMode.SINGLE_NOTE
 
-        self.target_note_name: str = "E"
+        self.target_note_name: str = "E4"
+        self.target_midi_number: int = 64
         self.target_string_num: int = 1
         self.target_chord_name: str = "C Major"
         self.target_chord_pcs: Set[int] = {0, 4, 7}  # C, E, G

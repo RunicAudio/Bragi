@@ -30,6 +30,7 @@ class InstrumentModal(ft.AlertDialog):
         self.instrument_type = self.configuration.instrument_type
         self.string_count = self.configuration.string_count
         self.tuning_name = self.configuration.tuning_name
+        self.fret_count = self.configuration.fret_count
 
         self.strings = {
             string.string_number: string
@@ -71,6 +72,14 @@ class InstrumentModal(ft.AlertDialog):
                 )
             ],
             on_select=self._on_string_count_changed,
+        )
+
+        self.fret_count_field = ft.TextField(
+            label="Number of Frets",
+            width=300,
+            value=str(self.fret_count),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            max_length=2,
         )
 
         self.tuning_mode = ft.RadioGroup(
@@ -124,6 +133,7 @@ class InstrumentModal(ft.AlertDialog):
                     controls=[
                         self.instrument_dropdown,
                         self.string_count_dropdown,
+                        self.fret_count_field,
                         ft.Divider(),
                         ft.Text(
                             "Tuning Configuration",
@@ -167,6 +177,8 @@ class InstrumentModal(ft.AlertDialog):
             self.instrument_type = selected_type
             self.string_count = standard.string_count
             self.tuning_name = standard.tuning_name
+            self.fret_count = standard.fret_count
+            self.fret_count_field.value = str(self.fret_count)
 
             self.strings = {
                 string.string_number: string
@@ -363,8 +375,8 @@ class InstrumentModal(ft.AlertDialog):
                 string_count=self.string_count,
                 tuning_name=self.tuning_name,
                 strings=tuple(updated_strings),
+                fret_count=int(self.fret_count_field.value.strip()),
             )
-
             self.app_state.set_instrument_configuration(
                 configuration
             )

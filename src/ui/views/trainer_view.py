@@ -14,7 +14,7 @@ from domain.chord_definitions import (
     get_chord_pitch_classes,
     select_random_chord,
 )
-from domain.music_theory import CHROMATIC_SHARPS, MusicTheory
+from domain.music_theory import MusicTheory
 from dsp.audio_engine import AudioEngine
 from ui.components.modals.hint_modal import HintModal
 
@@ -206,7 +206,11 @@ class TrainerView(ft.Container):
 
         if mode == TrainerSubMode.SINGLE_NOTE:
             live = self.app_state.live_pitch
-            if not live.is_silent and live.note_name == self.app_state.target_note_name and live.is_in_tune:
+            if (
+                not live.is_silent
+                and live.midi_number == self.app_state.target_midi_number
+                and live.is_in_tune
+            ):
                 if self.in_tune_start_time == 0.0:
                     self.in_tune_start_time = now
                 elif (now - self.in_tune_start_time) >= self.app_state.hold_duration_sec:
@@ -254,13 +258,24 @@ class TrainerView(ft.Container):
     def _advance_target(self) -> None:
         mode = self.app_state.trainer_mode
         if mode == TrainerSubMode.SINGLE_NOTE:
-            new_note = random.choice(CHROMATIC_SHARPS)
-            new_string = random.randint(
-                1,
-                self.app_state.instrument_configuration.string_count,
+            configuration = self.app_state.instrument_configuration
+            selected_string = random.choice(configuration.strings)
+
+            # Short drone strings, such as the fifth banjo string,
+            # can only be selected as open-string targets.
+            fret = (
+                0
+                if selected_string.is_short
+                else random.randint(0, configuration.fret_count)
             )
-            self.app_state.target_note_name = new_note
-            self.app_state.target_string_num = new_string
+
+            target_midi = selected_string.midi_number + fret
+
+            self.app_state.target_midi_number = target_midi
+            self.app_state.target_note_name = (
+                MusicTheory.midi_number_to_note_name(target_midi)
+            )
+            self.app_state.target_string_num = selected_string.string_number
         else:
             previous_chord = self.app_state.target_chord_name
 

@@ -6,7 +6,7 @@ frequency math, and note spelling.
 """
 
 import math
-from typing import Tuple
+from typing import Optional, Tuple
 
 
 CHROMATIC_SHARPS = [
@@ -74,6 +74,52 @@ class MusicTheory:
             return -1
 
         return (natural_pc + offset) % 12
+
+    @staticmethod
+    def frequency_to_midi_number(freq: float) -> Optional[int]:
+        """
+        Convert a frequency into its nearest MIDI note number.
+
+        Returns None for invalid or non-positive frequencies.
+        """
+        if not math.isfinite(freq) or freq <= 0:
+            return None
+
+        midi_num = (
+            12 * math.log2(freq / MusicTheory.A4_FREQ)
+            + MusicTheory.A4_MIDI
+        )
+
+        return round(midi_num)
+
+    @staticmethod
+    def midi_number_to_note_name(
+        midi_number: int,
+        prefer_flats: bool = False
+    ) -> str:
+        """
+        Convert a MIDI note number into a note name including its octave.
+
+        Examples:
+            48 -> C3
+            60 -> C4
+            69 -> A4
+        """
+        if (
+            not isinstance(midi_number, int)
+            or isinstance(midi_number, bool)
+        ):
+            raise ValueError("MIDI number must be an integer.")
+
+        pitch_class = midi_number % 12
+        octave = (midi_number // 12) - 1
+
+        note_name = MusicTheory.pitch_class_to_note(
+            pitch_class,
+            prefer_flats=prefer_flats
+        )
+
+        return f"{note_name}{octave}"
 
     @staticmethod
     def pitch_class_to_note(

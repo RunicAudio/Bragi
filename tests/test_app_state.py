@@ -277,7 +277,8 @@ def test_initial_state_defaults(app_state):
     assert state.current_view == ActiveViewMode.HOME
     assert state.trainer_mode == TrainerSubMode.SINGLE_NOTE
 
-    assert state.target_note_name == "E"
+    assert state.target_note_name == "E4"
+    assert state.target_midi_number == 64
     assert state.target_string_num == 1
 
     assert state.target_chord_name == "C Major"
