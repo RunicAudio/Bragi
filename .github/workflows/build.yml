@@ -47,7 +47,7 @@ jobs:
       - name: Build Windows application
         shell: pwsh
         run: |
-          flet build windows --artifact Bragi --python-version 3.12 --build-version "${{ steps.version.outputs.version }}" --build-number "${{ github.run_number }}"
+          flet build windows --output build/windows --artifact Bragi --python-version 3.12 --build-version "${{ steps.version.outputs.version }}" --build-number "${{ github.run_number }}"
           if (-not (Test-Path "build/windows/Bragi.exe")) {
             Get-ChildItem build/windows -Recurse | Select-Object FullName
             throw "Expected build/windows/Bragi.exe was not produced."
