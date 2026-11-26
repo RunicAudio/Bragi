@@ -4,10 +4,8 @@
 #define AppId "{{com.runicaudio.bragi}}"
 #define AppName "Bragi"
 #define AppExe "Bragi.exe"
-#define AppVersion "0.2.0"
-
 #ifndef AppVersion
-  #error AppVersion must be supplied by the release workflow.
+  #define AppVersion "0.2.0"
 #endif
 
 #if !FileExists("build\\windows\\{#AppExe}")
