@@ -83,5 +83,5 @@ def main(page: ft.Page) -> None:
 if __name__ == "__main__":
     ft.run(
         main,
-        assets_dir=str(SRC_DIR.parent / "assets"),
+        assets_dir=str(SRC_DIR / "assets"),
     )

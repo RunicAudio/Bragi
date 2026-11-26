@@ -23,3 +23,15 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
+
+[tool.flet]
+org = "com.runicaudio"
+product = "Bragi"
+company = "RunicAudio"
+copyright = "Copyright (C) 2026 Arthur Belanger"
+icon_background = "#282A36"
+permissions = ["microphone"]
+
+[tool.flet.app]
+path = "src"
+module = "main"
