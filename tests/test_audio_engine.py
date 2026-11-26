@@ -18,22 +18,86 @@ class FakeAppState:
 def audio_engine(monkeypatch):
     fake_state = FakeAppState()
 
+    class FakeDatabase:
+        def __init__(self):
+            self.settings = {}
+
+        def get_setting(self, key, default=None):
+            return self.settings.get(key, default)
+
+        def set_setting(self, key, value):
+            self.settings[key] = value
+
+    fake_db = FakeDatabase()
+
+    devices = [
+        {
+            "name": "Output Device",
+            "max_input_channels": 0,
+            "default_samplerate": 44100,
+            "hostapi": 1,
+        },
+        {
+            "name": "Microphone Array",
+            "max_input_channels": 2,
+            "default_samplerate": 44100,
+            "hostapi": 1,
+        },
+        {
+            "name": "Multichannel (HeadRush Core)",
+            "max_input_channels": 6,
+            "default_samplerate": 48000,
+            "hostapi": 1,
+        },
+    ]
+
+    host_apis = [
+        {
+            "name": "MME",
+            "default_input_device": -1,
+        },
+        {
+            "name": "Windows WASAPI",
+            "default_input_device": 2,
+        },
+    ]
+
     monkeypatch.setattr(
         "dsp.audio_engine.AppState.get_instance",
         lambda: fake_state,
     )
 
     monkeypatch.setattr(
-        AudioEngine,
-        "_find_preferred_input_device",
-        staticmethod(lambda: 2),
+        "dsp.audio_engine.DatabaseManager.get_instance",
+        lambda: fake_db,
+    )
+
+    monkeypatch.setattr(
+        "dsp.audio_engine.sys.platform",
+        "win32",
+    )
+
+    monkeypatch.setattr(
+        "dsp.audio_engine.sd.query_devices",
+        lambda *args, **kwargs: (
+            devices if not args else devices[args[0]]
+        ),
+    )
+
+    monkeypatch.setattr(
+        "dsp.audio_engine.sd.query_hostapis",
+        lambda *args, **kwargs: host_apis,
+    )
+
+    monkeypatch.setattr(
+        "dsp.audio_engine.sd.default.device",
+        [1, -1],
     )
 
     engine = AudioEngine()
 
     yield engine
 
-    # Ensure no worker or stream survives a test.
     engine.stop()
 
 
@@ -64,69 +128,140 @@ class TestAudioEngineInitialization:
         assert audio_engine.chroma_analyzer.sample_rate == 44100
 
 
-class TestPreferredDeviceDetection:
+class TestAudioDeviceDiscovery:
 
-    def test_finds_headrush_wasapi_input(self, monkeypatch):
-        devices = [
-            {
-                "name": "HeadRush Core Line 1/2",
-                "max_input_channels": 2,
-                "hostapi": 0,
-            },
-        ]
+    def test_selects_windows_wasapi(self, audio_engine):
+        assert audio_engine.device_id == 2
+        assert audio_engine.device_key is not None
+        assert "Windows WASAPI" in audio_engine.device_key
 
+    def test_selects_macos_core_audio(self, audio_engine, monkeypatch):
         monkeypatch.setattr(
-            "dsp.audio_engine.sd.query_devices",
-            lambda: devices,
+            "dsp.audio_engine.sys.platform",
+            "darwin",
         )
+
+        host_apis = [
+            {"name": "MME", "default_input_device": -1},
+            {"name": "Core Audio", "default_input_device": 2},
+        ]
 
         monkeypatch.setattr(
             "dsp.audio_engine.sd.query_hostapis",
-            lambda index: {"name": "Windows WASAPI"},
+            lambda: host_apis,
         )
 
-        assert AudioEngine._find_preferred_input_device() == 0
+        assert audio_engine._select_input_host_api(
+            host_apis,
+            [
+                {"hostapi": 0, "max_input_channels": 2},
+                {"hostapi": 1, "max_input_channels": 2},
+            ],
+        ) == 1
 
-    def test_ignores_headrush_device_without_input_channels(
-        self, monkeypatch
-    ):
-        devices = [
-            {
-                "name": "HeadRush Core Line 1/2",
-                "max_input_channels": 0,
-                "hostapi": 0,
-            },
+    def test_prefers_linux_pulseaudio(self, audio_engine, monkeypatch):
+        monkeypatch.setattr(
+            "dsp.audio_engine.sys.platform",
+            "linux",
+        )
+
+        host_apis = [
+            {"name": "ALSA", "default_input_device": 1},
+            {"name": "PulseAudio", "default_input_device": 2},
         ]
 
+        assert audio_engine._select_input_host_api(
+            host_apis,
+            [
+                {"hostapi": 0, "max_input_channels": 2},
+                {"hostapi": 1, "max_input_channels": 2},
+            ],
+        ) == 1
+
+    def test_falls_back_to_linux_alsa(self, audio_engine, monkeypatch):
         monkeypatch.setattr(
-            "dsp.audio_engine.sd.query_devices",
-            lambda: devices,
+            "dsp.audio_engine.sys.platform",
+            "linux",
         )
 
-        assert AudioEngine._find_preferred_input_device() is None
-
-    def test_ignores_headrush_device_on_non_wasapi_host(
-        self, monkeypatch
-    ):
-        devices = [
-            {
-                "name": "HeadRush Core Line 1/2",
-                "max_input_channels": 2,
-                "hostapi": 0,
-            },
+        host_apis = [
+            {"name": "ALSA", "default_input_device": 1},
+            {"name": "JACK", "default_input_device": -1},
         ]
 
-        monkeypatch.setattr(
-            "dsp.audio_engine.sd.query_devices",
-            lambda: devices,
+        assert audio_engine._select_input_host_api(
+            host_apis,
+            [
+                {"hostapi": 0, "max_input_channels": 2},
+                {"hostapi": 1, "max_input_channels": 2},
+            ],
+        ) == 0
+
+    def test_excludes_output_only_devices(self, audio_engine):
+        devices = audio_engine.get_input_devices()
+
+        assert all(device["channels"] > 0 for device in devices)
+        assert all(device["host_api"] == "Windows WASAPI" for device in devices)
+
+        assert len(devices) == 2
+
+    def test_marks_host_api_default_input(self, audio_engine):
+        devices = audio_engine.get_input_devices()
+
+        default_devices = [
+            device for device in devices
+            if device["is_default"]
+        ]
+
+        assert len(default_devices) == 1
+        assert default_devices[0]["id"] == 2
+
+    def test_restores_saved_device(self, audio_engine):
+        devices = audio_engine.get_input_devices()
+        saved_device = devices[0]
+
+        audio_engine.db.set_setting(
+            "audio_input_device",
+            saved_device["key"],
         )
 
-        monkeypatch.setattr(
-            "dsp.audio_engine.sd.query_hostapis",
-            lambda index: {"name": "Windows DirectSound"},
+        audio_engine._initialize_input_device()
+
+        assert audio_engine.device_key == saved_device["key"]
+        assert audio_engine.device_id == saved_device["id"]
+
+    def test_falls_back_when_saved_device_is_missing(self, audio_engine):
+        audio_engine.db.set_setting(
+            "audio_input_device",
+            "Missing API|Disconnected Device|2ch",
         )
 
-        assert AudioEngine._find_preferred_input_device() is None
+        audio_engine._initialize_input_device()
+
+        assert audio_engine.device_id == 2
+        assert audio_engine.device_key is not None
+
+    def test_persists_selected_device(self, audio_engine, monkeypatch):
+        devices = audio_engine.get_input_devices()
+        selected_device = devices[0]
+
+        mock_stop = MagicMock()
+        mock_start = MagicMock()
+
+        monkeypatch.setattr(audio_engine, "stop", mock_stop)
+        monkeypatch.setattr(audio_engine, "start", mock_start)
+
+        audio_engine.set_device(selected_device["key"])
+
+        assert audio_engine.db.get_setting(
+            "audio_input_device"
+        ) == selected_device["key"]
+
+        assert audio_engine.device_id == selected_device["id"]
+        assert audio_engine.device_key == selected_device["key"]
+
+        mock_stop.assert_called_once()
+        mock_start.assert_called_once()
 
 class TestAudioStreamLifecycle:
 
@@ -233,6 +368,54 @@ class TestAudioStreamLifecycle:
 
             assert audio_engine.stream is streams[1]
             assert audio_engine.sample_rate == 48000
+
+        finally:
+            audio_engine.stop()
+
+    def test_retries_with_more_channels_when_mono_is_unsupported(
+        self, audio_engine, monkeypatch
+    ):
+        stream_attempts = []
+
+        def create_stream(**kwargs):
+            stream_attempts.append(kwargs)
+
+            if kwargs["channels"] < 6:
+                raise RuntimeError("Invalid number of channels")
+
+            return MagicMock()
+
+        monkeypatch.setattr(
+            "dsp.audio_engine.sd.query_devices",
+            lambda *args, **kwargs: {
+                "default_samplerate": 48000,
+                "max_input_channels": 6,
+            },
+        )
+
+        monkeypatch.setattr(
+            "dsp.audio_engine.sd.InputStream",
+            create_stream,
+        )
+
+        audio_engine.start()
+
+        try:
+            assert audio_engine.is_running is True
+            assert audio_engine.sample_rate == 48000
+            assert audio_engine.stream is not None
+
+            assert [
+                attempt["channels"]
+                for attempt in stream_attempts
+            ] == [1, 2, 3, 4, 5, 6]
+
+            assert all(
+                attempt["samplerate"] == 48000
+                for attempt in stream_attempts
+            )
+
+            audio_engine.stream.start.assert_called_once()
 
         finally:
             audio_engine.stop()
@@ -635,8 +818,13 @@ class TestDSPWorkerProcessing:
             MagicMock(return_value=(set(), np.zeros(12))),
         )
 
-        mock_page = MagicMock()
-        audio_engine._ui_page = mock_page
+        dispatch_mock = MagicMock()
+
+        monkeypatch.setattr(
+            audio_engine,
+            "_dispatch_live_pitch",
+            dispatch_mock,
+        )
 
         audio_engine._audio_queue.put_nowait(
             np.ones(2048, dtype=np.float32)
@@ -668,7 +856,7 @@ class TestDSPWorkerProcessing:
 
         audio_engine._process_audio_queue()
 
-        assert mock_page.run_task.call_count == 2
+        assert dispatch_mock.call_count == 2
 
     def test_skips_ui_dispatch_when_page_is_none(
         self, audio_engine, monkeypatch
@@ -709,8 +897,26 @@ class TestDSPWorkerProcessing:
         pitch_mock.assert_called_once()
         assert audio_engine._last_ui_notify_time > 0
 
-    def test_handles_ui_dispatch_exception(self, audio_engine, monkeypatch):
+    def test_detaches_destroyed_flet_session(
+        self, audio_engine, monkeypatch
+    ):
         from unittest.mock import MagicMock
+
+        class DestroyedPage:
+            @property
+            def session(self):
+                raise RuntimeError("An attempt to fetch destroyed session.")
+
+        page = DestroyedPage()
+        audio_engine.set_ui_page(page)
+
+        publish_mock = MagicMock()
+
+        monkeypatch.setattr(
+            audio_engine,
+            "_publish_live_pitch",
+            publish_mock,
+        )
 
         mock_pitch = LivePitch(
             note_name="E",
@@ -720,42 +926,62 @@ class TestDSPWorkerProcessing:
             is_in_tune=True,
         )
 
+        audio_engine._dispatch_live_pitch(mock_pitch)
+
+        assert audio_engine._ui_page is None
+        publish_mock.assert_not_called()
+
+    def test_closes_coroutine_when_event_loop_scheduling_fails(
+        self, audio_engine, monkeypatch
+    ):
+        import inspect
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        page = SimpleNamespace(
+            session=SimpleNamespace(
+                connection=SimpleNamespace(loop=MagicMock())
+            )
+        )
+
+        audio_engine.set_ui_page(page)
+
+        async def fake_publish(live_pitch):
+            pass
+
         monkeypatch.setattr(
-            audio_engine.pitch_tracker,
-            "process_frame",
-            MagicMock(return_value=mock_pitch),
+            audio_engine,
+            "_publish_live_pitch",
+            fake_publish,
+        )
+
+        scheduler_mock = MagicMock(
+            side_effect=RuntimeError("Event loop is closed.")
         )
 
         monkeypatch.setattr(
-            audio_engine.chroma_analyzer,
-            "process_frame",
-            MagicMock(return_value=(set(), np.zeros(12))),
+            "dsp.audio_engine.asyncio.run_coroutine_threadsafe",
+            scheduler_mock,
         )
 
-        mock_page = MagicMock()
-        mock_page.run_task.side_effect = RuntimeError("UI unavailable")
-        audio_engine._ui_page = mock_page
-
-        audio_engine._audio_queue.put_nowait(
-            np.ones(2048, dtype=np.float32)
+        mock_pitch = LivePitch(
+            note_name="E",
+            pitch_class=4,
+            frequency=329.63,
+            is_silent=False,
+            is_in_tune=True,
         )
 
-        class FakeStopEvent:
-            def __init__(self):
-                self.calls = 0
+        audio_engine._dispatch_live_pitch(mock_pitch)
 
-            def is_set(self):
-                self.calls += 1
-                return self.calls >= 3
+        scheduler_mock.assert_called_once()
 
-            def set(self):
-                pass
+        scheduled_coroutine = scheduler_mock.call_args.args[0]
 
-        audio_engine._dsp_stop_event = FakeStopEvent()
-        audio_engine._process_audio_queue()
-
-        mock_page.run_task.assert_called_once()
-        assert audio_engine._last_ui_notify_time > 0
+        assert inspect.getcoroutinestate(scheduled_coroutine) == (
+            inspect.CORO_CLOSED
+        )
+        assert audio_engine._ui_page is None
 
     def test_publish_live_pitch_updates_app_state(self, audio_engine):
         import asyncio

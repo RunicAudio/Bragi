@@ -70,48 +70,76 @@ class DeviceModal(ft.AlertDialog):
         self.radio_group.on_change = None
 
         devices = self.audio_engine.get_input_devices()
-        current_id = self.audio_engine.device_id
+        current_key = self.audio_engine.device_key
 
         radios = []
 
         for dev in devices:
-            dev_id = dev["id"]
-            label = f"{dev['name']} ({dev['channels']} ch)"
-            radios.append(ft.Radio(value=str(dev_id), label=label))
+            device_key = dev["key"]
+
+            label = (
+                f"{dev['name']} "
+                f"({dev['channels']} ch) "
+                f"— {dev['host_api']}"
+            )
+
+            if dev["is_default"]:
+                label += " [Default]"
+
+            radios.append(
+                ft.Radio(
+                    value=device_key,
+                    label=label,
+                )
+            )
+
+        if not radios:
+            radios.append(
+                ft.Text(
+                    "No audio input devices detected.",
+                    color=ft.Colors.RED_300,
+                    size=13,
+                )
+            )
 
         self.radio_group.content.controls = radios
 
-        available_ids = {dev["id"] for dev in devices}
+        available_keys = {dev["key"] for dev in devices}
 
-        if current_id in available_ids:
-            self.radio_group.value = str(current_id)
+        if current_key in available_keys:
+            self.radio_group.value = current_key
         elif devices:
-            self.radio_group.value = str(devices[0]["id"])
+            default_device = next(
+                (dev for dev in devices if dev["is_default"]),
+                devices[0],
+            )
+            self.radio_group.value = default_device["key"]
+        else:
+            self.radio_group.value = None
 
         # Enable device switching after initialization.
         self.radio_group.on_change = self._on_radio_changed
 
     def _on_radio_changed(self, e: ft.ControlEvent) -> None:
-        val = e.control.value
+        device_key = e.control.value
 
-        if val is None:
+        if not device_key:
             return
 
-        try:
-            dev_id = int(val)
+        if device_key == self.audio_engine.device_key:
+            return
 
-            if dev_id == self.audio_engine.device_id:
-                return
-
-            self.audio_engine.set_device(dev_id)
-
-        except (ValueError, TypeError) as exc:
-            print(f"[DeviceModal] Invalid device selection: {exc}")
+        self.audio_engine.set_device(device_key)
 
     def _refresh_devices(self, e: ft.ControlEvent) -> None:
-        self._populate_devices()
         self.audio_engine.stop()
+
+        # Re-resolve the saved preference against currently connected devices.
+        self.audio_engine._initialize_input_device()
+
+        self._populate_devices()
         self.audio_engine.start()
+
         if self.page:
             self.update()
 

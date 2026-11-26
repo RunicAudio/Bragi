@@ -1007,3 +1007,38 @@ def test_delete_last_remaining_player_is_rejected(db):
 def test_delete_nonexistent_player_is_rejected(db):
     with pytest.raises(ValueError):
         db.delete_player(9999)
+
+def test_get_setting_returns_default_when_missing(db):
+    assert db.get_setting("audio_input_device") is None
+    assert db.get_setting("audio_input_device", "default-device") == "default-device"
+
+
+def test_set_and_get_setting(db):
+    db.set_setting("audio_input_device", "Windows WASAPI|HeadRush Core|Multichannel")
+
+    assert db.get_setting("audio_input_device") == (
+        "Windows WASAPI|HeadRush Core|Multichannel"
+    )
+
+
+def test_set_setting_updates_existing_value(db):
+    db.set_setting("audio_input_device", "Device A")
+    db.set_setting("audio_input_device", "Device B")
+
+    assert db.get_setting("audio_input_device") == "Device B"
+
+
+def test_settings_are_global_across_players(db):
+    db.set_setting("audio_input_device", "Windows WASAPI|HeadRush Core|Multichannel")
+
+    player_id = db.create_player("Alex")
+    db.set_active_player_id(player_id)
+
+    assert db.get_setting("audio_input_device") == (
+        "Windows WASAPI|HeadRush Core|Multichannel"
+    )
+
+
+def test_set_setting_rejects_empty_key(db):
+    with pytest.raises(ValueError, match="Setting key cannot be empty"):
+        db.set_setting("   ", "value")

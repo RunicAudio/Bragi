@@ -6,16 +6,21 @@ sample rate auto-detection, rolling PCM analysis buffer, dual DSP analysis,
 and time-windowed arpeggio accumulation.
 """
 
+import sys
 import time
 import queue
 import threading
+import asyncio
+import time
 from typing import Any, Dict, List, Optional, Set, Tuple
+
 import numpy as np
 import sounddevice as sd
 
 from core.app_state import AppState, LivePitch
 from dsp.chromagram import ChromagramAnalyzer
 from dsp.pitch_tracker import PitchTracker
+from storage.db_manager import DatabaseManager
 
 
 class AudioEngine:
@@ -36,27 +41,14 @@ class AudioEngine:
 
         self.stream: Optional[sd.InputStream] = None
 
-        self.device_id = self._find_preferred_input_device()
+        # Persistent application-wide audio input preference.
+        self.db = DatabaseManager.get_instance()
 
-        if self.device_id is None:
-            try:
-                default_in = sd.default.device[0]
-                self.device_id = (
-                    int(default_in)
-                    if default_in is not None and default_in >= 0
-                    else None
-                )
-                print(
-                    f"[AudioEngine] HeadRush WASAPI not found. "
-                    f"Using system default input: {self.device_id}"
-                )
-            except Exception:
-                self.device_id = None
-        else:
-            print(
-                f"[AudioEngine] Preferred HeadRush input found: "
-                f"device {self.device_id}"
-            )
+        # Runtime device index and persistent device identity.
+        self.device_id: Optional[int] = None
+        self.device_key: Optional[str] = None
+
+        self._initialize_input_device()
 
         self.is_running = False
 
@@ -67,6 +59,7 @@ class AudioEngine:
         self._analysis_lock = threading.Lock()
 
         self._ui_page = None
+        self._ui_page_lock = threading.Lock()
 
         self._arpeggio_history: List[Tuple[int, float]] = []
         self._last_ui_notify_time = 0.0
@@ -78,107 +71,276 @@ class AudioEngine:
             cls._instance = cls()
         return cls._instance
 
-    @staticmethod
-    def _find_preferred_input_device() -> Optional[int]:
-        """Find the HeadRush Core Line 1/2 input using Windows WASAPI."""
+    def _select_input_host_api(
+        self,
+        host_apis: List[Dict[str, Any]],
+        devices: List[Dict[str, Any]],
+    ) -> Optional[int]:
+        """
+        Select one host API to avoid duplicate representations of devices.
 
+        Windows: WASAPI
+        macOS: Core Audio
+        Linux: PulseAudio, then ALSA
+        Other cases: system default input host API, then first available.
+        """
+
+        api_names = [
+            api.get("name", "")
+            for api in host_apis
+        ]
+
+        preferred_names = []
+
+        if sys.platform == "win32":
+            preferred_names = ["Windows WASAPI"]
+
+        elif sys.platform == "darwin":
+            preferred_names = ["Core Audio"]
+
+        elif sys.platform.startswith("linux"):
+            preferred_names = ["PulseAudio", "ALSA"]
+
+        # Use the preferred host API when available and it has inputs.
+        for preferred_name in preferred_names:
+            for api_index, api_name in enumerate(api_names):
+                if api_name.lower() == preferred_name.lower():
+                    if any(
+                        device.get("hostapi") == api_index
+                        and device.get("max_input_channels", 0) > 0
+                        for device in devices
+                    ):
+                        return api_index
+
+        # Fall back to the host API containing the system default input.
         try:
-            devices = sd.query_devices()
+            default_input = sd.default.device[0]
 
-            for idx, device in enumerate(devices):
-                name = device.get("name", "")
+            if default_input is not None and int(default_input) >= 0:
+                default_device = sd.query_devices(int(default_input))
+                default_api = default_device.get("hostapi")
 
                 if (
-                    "HeadRush Core" not in name
-                    or "Line 1/2" not in name
-                    or device.get("max_input_channels", 0) < 1
+                    default_api is not None
+                    and any(
+                        device.get("hostapi") == default_api
+                        and device.get("max_input_channels", 0) > 0
+                        for device in devices
+                    )
                 ):
-                    continue
+                    return int(default_api)
 
-                host_api = sd.query_hostapis(device["hostapi"])["name"]
+        except Exception:
+            pass
 
-                if "WASAPI" in host_api:
-                    return idx
-
-        except Exception as error:
-            print(
-                f"[AudioEngine] Preferred device detection failed: {error}"
-            )
+        # Last resort: first host API with an input-capable device.
+        for api_index in range(len(host_apis)):
+            if any(
+                device.get("hostapi") == api_index
+                and device.get("max_input_channels", 0) > 0
+                for device in devices
+            ):
+                return api_index
 
         return None
 
     def get_input_devices(self) -> List[Dict[str, Any]]:
-        """Return primary audio inputs without duplicate host API entries."""
+        """Return input devices from one selected host API."""
 
-        input_devs = []
+        input_devices = []
 
         try:
             devices = sd.query_devices()
             host_apis = sd.query_hostapis()
 
-            preferred_devices = [
-                # All HeadRush input configurations
-                ("HeadRush Core", "Line 1/2", "Windows WASAPI"),
-                ("HeadRush Core", "Line 3/4", "Windows WASAPI"),
-                ("HeadRush Core", "Line 5/6", "Windows WASAPI"),
-                ("HeadRush Core", "Multichannel", "Windows WASAPI"),
-
-                # Other useful inputs
-                ("Intel", "Microphone Array", "Windows WASAPI"),
-                ("Voicemeeter", "Out B1", "Windows WASAPI"),
-                ("Realtek", "Microphone", "Windows WDM-KS"),
-            ]
-
-            for manufacturer, endpoint, preferred_api in preferred_devices:
-                for idx, dev in enumerate(devices):
-
-                    if dev.get("max_input_channels", 0) <= 0:
-                        continue
-
-                    name = dev.get("name", "")
-                    host_api = host_apis[dev["hostapi"]]["name"]
-
-                    if manufacturer.lower() not in name.lower():
-                        continue
-
-                    if endpoint.lower() not in name.lower():
-                        continue
-
-                    if host_api != preferred_api:
-                        continue
-
-                    input_devs.append({
-                        "id": idx,
-                        "name": name,
-                        "channels": dev["max_input_channels"],
-                        "default_samplerate": dev["default_samplerate"],
-                        "host_api": host_api,
-                    })
-
-                    break
-
-        except Exception as e:
-            print(f"[AudioEngine] Failed to query audio devices: {e}")
-
-        print(f"[AudioEngine] Found {len(input_devs)} primary input devices.")
-
-        for dev in input_devs:
-            print(
-                f"[AudioEngine] {dev['id']}: "
-                f"{dev['name']} ({dev['channels']} channels)"
+            selected_api = self._select_input_host_api(
+                host_apis,
+                devices,
             )
 
-        return input_devs
+            if selected_api is None:
+                print("[AudioEngine] No usable audio host API found.")
+                return []
+
+            selected_api_name = host_apis[selected_api]["name"]
+
+            default_device_id = host_apis[selected_api].get(
+                "default_input_device",
+                -1,
+            )
+
+            for device_id, device in enumerate(devices):
+                if device.get("hostapi") != selected_api:
+                    continue
+
+                channels = int(device.get("max_input_channels", 0))
+
+                if channels <= 0:
+                    continue
+
+                name = device.get("name", "Unknown input")
+
+                # This identity remains stable when PortAudio indexes change.
+                device_key = (
+                    f"{selected_api_name}|{name}|{channels}ch"
+                )
+
+                input_devices.append({
+                    "id": device_id,
+                    "key": device_key,
+                    "name": name,
+                    "channels": channels,
+                    "default_samplerate": device.get(
+                        "default_samplerate",
+                        44100,
+                    ),
+                    "host_api": selected_api_name,
+                    "is_default": device_id == default_device_id,
+                })
+
+            print(
+                f"[AudioEngine] Using {selected_api_name}: "
+                f"{len(input_devices)} input device(s)."
+            )
+
+            for device in input_devices:
+                default_label = " [DEFAULT]" if device["is_default"] else ""
+
+                print(
+                    f"[AudioEngine] {device['id']}: "
+                    f"{device['name']} "
+                    f"({device['channels']} channels)"
+                    f"{default_label}"
+                )
+
+        except Exception as error:
+            print(
+                f"[AudioEngine] Failed to query audio devices: {error}"
+            )
+
+        return input_devices
+
+    def _initialize_input_device(self) -> None:
+        """Restore the saved input device or use the host API default."""
+
+        devices = self.get_input_devices()
+
+        if not devices:
+            self.device_id = None
+            self.device_key = None
+            print("[AudioEngine] No input devices are currently available.")
+            return
+
+        saved_key = self.db.get_setting("audio_input_device")
+
+        selected_device = None
+
+        if saved_key:
+            selected_device = next(
+                (
+                    device for device in devices
+                    if device["key"] == saved_key
+                ),
+                None,
+            )
+
+            if selected_device:
+                print(
+                    f"[AudioEngine] Restored saved input: "
+                    f"{selected_device['name']}"
+                )
+            else:
+                print(
+                    "[AudioEngine] Saved input is unavailable. "
+                    "Using the system default."
+                )
+
+        if selected_device is None:
+            selected_device = next(
+                (
+                    device for device in devices
+                    if device["is_default"]
+                ),
+                devices[0],
+            )
+
+        self.device_id = selected_device["id"]
+        self.device_key = selected_device["key"]
+
+        print(
+            f"[AudioEngine] Active input: "
+            f"{selected_device['name']} "
+            f"({selected_device['host_api']})"
+        )
 
     def set_ui_page(self, page) -> None:
-        """Registers the Flet page for thread-safe UI dispatch."""
-        self._ui_page = page
+        """Register or detach the Flet page safely across threads."""
+        with self._ui_page_lock:
+            self._ui_page = page
 
-    def set_device(self, device_id: int) -> None:
-        """Switches microphone input source to target hardware device ID."""
-        target_id = None if device_id < 0 else device_id
-        print(f"[AudioEngine] Setting input device to ID: {target_id}")
-        self.device_id = target_id
+    def _dispatch_live_pitch(self, live_pitch: LivePitch) -> None:
+        """Schedule pitch publication without touching a destroyed Flet session."""
+
+        with self._ui_page_lock:
+            page = self._ui_page
+
+        if page is None:
+            return
+
+        # Retrieve the event loop before creating the coroutine.
+        try:
+            loop = page.session.connection.loop
+        except RuntimeError:
+            with self._ui_page_lock:
+                if self._ui_page is page:
+                    self._ui_page = None
+            return
+
+        coroutine = self._publish_live_pitch(live_pitch)
+
+        try:
+            asyncio.run_coroutine_threadsafe(coroutine, loop)
+        except RuntimeError:
+            coroutine.close()
+
+            with self._ui_page_lock:
+                if self._ui_page is page:
+                    self._ui_page = None
+
+    def set_device(self, device_key: str) -> None:
+        """Switch input devices and persist the selected device identity."""
+
+        devices = self.get_input_devices()
+
+        selected_device = next(
+            (
+                device for device in devices
+                if device["key"] == device_key
+            ),
+            None,
+        )
+
+        if selected_device is None:
+            print(
+                f"[AudioEngine] Requested input device is unavailable: "
+                f"{device_key}"
+            )
+            return
+
+        if self.device_key == device_key and self.is_running:
+            return
+
+        self.device_id = selected_device["id"]
+        self.device_key = selected_device["key"]
+
+        self.db.set_setting("audio_input_device", self.device_key)
+
+        print(
+            f"[AudioEngine] Switching input to "
+            f"{selected_device['name']} "
+            f"({selected_device['host_api']})"
+        )
+
         self.stop()
         self.start()
 
@@ -186,7 +348,7 @@ class AudioEngine:
         if self.is_running:
             return
 
-        # Determine the selected device's native sample rate.
+        # Determine the selected device's native audio capabilities.
         try:
             if self.device_id is not None:
                 dev_info = sd.query_devices(self.device_id, "input")
@@ -194,12 +356,24 @@ class AudioEngine:
                 dev_info = sd.query_devices(kind="input")
 
             native_sr = int(dev_info.get("default_samplerate", 44100))
+            max_channels = max(
+                1,
+                int(dev_info.get("max_input_channels", 1)),
+            )
+
         except Exception as e:
             print(f"[AudioEngine] Query device info warning: {e}")
             native_sr = self.sample_rate
+            max_channels = 1
 
-        # Try native rate first, then the alternate common rate.
-        sample_rates = [native_sr, 48000 if native_sr != 48000 else 44100]
+        # Try the native sample rate before the alternate common rate.
+        sample_rates = [
+            native_sr,
+            48000 if native_sr != 48000 else 44100,
+        ]
+
+        # Try the lowest channel count first.
+        channel_counts = list(range(1, max_channels + 1))
 
         # Prepare the DSP worker.
         self._dsp_stop_event.clear()
@@ -223,39 +397,44 @@ class AudioEngine:
         self.is_running = True
 
         for sample_rate in sample_rates:
-            try:
-                self.sample_rate = sample_rate
-                self.pitch_tracker.set_sample_rate(sample_rate)
-                self.chroma_analyzer.sample_rate = sample_rate
+            for channels in channel_counts:
+                self.stream = None
 
-                self.stream = sd.InputStream(
-                    device=self.device_id,
-                    samplerate=sample_rate,
-                    blocksize=self.block_size,
-                    channels=1,
-                    callback=self._audio_callback,
-                )
+                try:
+                    self.sample_rate = sample_rate
+                    self.pitch_tracker.set_sample_rate(sample_rate)
+                    self.chroma_analyzer.sample_rate = sample_rate
 
-                self.stream.start()
+                    self.stream = sd.InputStream(
+                        device=self.device_id,
+                        samplerate=sample_rate,
+                        blocksize=self.block_size,
+                        channels=channels,
+                        callback=self._audio_callback,
+                    )
 
-                print(
-                    f"[AudioEngine] Audio stream started on device "
-                    f"{self.device_id} @ {sample_rate}Hz"
-                )
-                return
+                    self.stream.start()
 
-            except Exception as e:
-                print(
-                    f"[AudioEngine] Stream start failed @ "
-                    f"{sample_rate}Hz: {e}"
-                )
+                    print(
+                        f"[AudioEngine] Audio stream started on device "
+                        f"{self.device_id} @ {sample_rate}Hz "
+                        f"({channels} channel(s))"
+                    )
+                    return
 
-                if self.stream is not None:
-                    try:
-                        self.stream.close()
-                    except Exception:
-                        pass
-                    self.stream = None
+                except Exception as e:
+                    print(
+                        f"[AudioEngine] Stream start failed: "
+                        f"{sample_rate}Hz, {channels} channel(s): {e}"
+                    )
+
+                    if self.stream is not None:
+                        try:
+                            self.stream.close()
+                        except Exception:
+                            pass
+
+                        self.stream = None
 
         print("[AudioEngine] All audio stream start attempts failed.")
         self.stop()
@@ -357,14 +536,8 @@ class AudioEngine:
                     self._last_ui_notify_time = now
 
                     if not self._dsp_stop_event.is_set():
-                        page = self._ui_page
-
-                        if page is not None:
-                            try:
-                                page.run_task(self._publish_live_pitch, live_pitch)
-                            except Exception as e:
-                                print(f"[AudioEngine] UI dispatch error: {e}")
-
+                        self._dispatch_live_pitch(live_pitch)
+                        
             except Exception as e:
                 print(f"[AudioEngine] DSP worker error: {e}")
 

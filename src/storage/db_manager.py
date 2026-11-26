@@ -518,6 +518,46 @@ class DatabaseManager:
 
             conn.commit()
 
+    # ============================================================
+    # APPLICATION SETTINGS
+    # ============================================================
+
+    def get_setting(
+        self,
+        key: str,
+        default: Optional[str] = None,
+    ) -> Optional[str]:
+        """Retrieve a global application setting."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT setting_value
+                FROM app_settings
+                WHERE setting_key = ?
+                """,
+                (key,),
+            ).fetchone()
+
+            return row["setting_value"] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Insert or update a global application setting."""
+        if not key.strip():
+            raise ValueError("Setting key cannot be empty.")
+
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO app_settings (setting_key, setting_value)
+                VALUES (?, ?)
+                ON CONFLICT(setting_key)
+                DO UPDATE SET setting_value = excluded.setting_value
+                """,
+                (key, value),
+            )
+
+            conn.commit()
+
     def rename_player(self, player_id: int, name: str) -> None:
         """Rename an existing player without changing their progress."""
         name = name.strip()
