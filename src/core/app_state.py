@@ -16,6 +16,7 @@ from storage.db_manager import DatabaseManager, UserProfileData
 
 
 class ActiveViewMode(str, Enum):
+    HOME = "HOME"
     TRAINER = "TRAINER"
     TUNER = "TUNER"
     EAR_TRAINING = "EAR_TRAINING"
@@ -46,7 +47,7 @@ class AppState:
     _instance: Optional["AppState"] = None
 
     def __init__(self) -> None:
-        self.current_view: ActiveViewMode = ActiveViewMode.TRAINER
+        self.current_view: ActiveViewMode = ActiveViewMode.HOME
         self.trainer_mode: TrainerSubMode = TrainerSubMode.SINGLE_NOTE
 
         self.target_note_name: str = "E"
@@ -164,7 +165,7 @@ class AppState:
             self._load_player_data()
 
         self.notify_view_changed()
-        
+
     def delete_player(self, player_id: int) -> int:
         """
         Delete a player and refresh application state if necessary.

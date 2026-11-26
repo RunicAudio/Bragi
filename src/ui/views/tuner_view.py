@@ -15,6 +15,7 @@ class TunerView(ft.Container):
         super().__init__()
         self.expand = True
         self.padding = 24
+        self.alignment = ft.Alignment.CENTER
         self.app_state = AppState.get_instance()
 
         # Persistent dynamic controls
@@ -25,6 +26,7 @@ class TunerView(ft.Container):
             alignment=ft.Alignment(0, 0),
             content=ft.Container(width=6, height=36, bgcolor=ft.Colors.WHITE, border_radius=3),
         )
+
         self.gauge_container = ft.Container(
             content=ft.Column(
                 controls=[
@@ -35,14 +37,21 @@ class TunerView(ft.Container):
                             controls=[
                                 ft.Container(
                                     alignment=ft.Alignment.CENTER,
-                                    content=ft.VerticalDivider(width=2, color=ft.Colors.with_opacity(0.54, ft.Colors.WHITE)),
+                                    content=ft.VerticalDivider(
+                                        width=2,
+                                        color=ft.Colors.with_opacity(
+                                            0.54, ft.Colors.WHITE
+                                        ),
+                                    ),
                                 ),
                                 self.needle_container,
                             ]
                         ),
-                        width=300,
+                        width=280,
                         height=40,
-                        bgcolor=ft.Colors.with_opacity(0.38, ft.Colors.BLACK),
+                        bgcolor=ft.Colors.with_opacity(
+                            0.38, ft.Colors.BLACK
+                        ),
                         border_radius=20,
                     ),
                     self.txt_status,
@@ -50,11 +59,14 @@ class TunerView(ft.Container):
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 alignment=ft.MainAxisAlignment.CENTER,
                 spacing=16,
+                tight=True,
             ),
+            width=340,
+            height=340,
             bgcolor=ft.Colors.with_opacity(0.6, "#2A2A3C"),
-            border_radius=24,
-            padding=32,
-            width=400,
+            border=ft.Border.all(4, ft.Colors.AMBER_400),
+            border_radius=170,
+            padding=28,
             alignment=ft.Alignment.CENTER,
         )
 

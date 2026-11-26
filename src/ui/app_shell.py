@@ -1,13 +1,13 @@
 """
 src/ui/app_shell.py
 ===================
-Master application container providing full-bleed background artwork (bg.png),
-header bar navigation, and subview routing.
+Master application container providing view-specific background artwork,
+header navigation, and subview routing.
 """
 
 import flet as ft
 
-from core.app_state import AppState
+from core.app_state import ActiveViewMode, AppState
 from ui.components.header_nav import HeaderNav
 from ui.components.modals.device_modal import DeviceModal
 from ui.components.modals.filter_modal import FilterModal
@@ -16,15 +16,37 @@ from ui.components.modals.instrument_modal import InstrumentModal
 
 
 class AppShell(ft.Stack):
-    """Main application shell routing views over full-bleed background artwork."""
+    """Main application shell routing views over background artwork."""
 
     def __init__(self, page: ft.Page) -> None:
         super().__init__()
+
         self.app_page = page
         self.expand = True
 
         self.app_state = AppState.get_instance()
 
+        # Background image assigned to each application view.
+        self.backgrounds = {
+            ActiveViewMode.HOME: "home_bg.png",
+            ActiveViewMode.TRAINER: "trainer_bg.png",
+            ActiveViewMode.TUNER: "tuner_bg.png",
+            ActiveViewMode.EAR_TRAINING: "ear_trainer_bg.png",
+            ActiveViewMode.ANALYTICS: "analytic_bg.png",
+        }
+
+        # Background image control.
+        self.background_image = ft.Image(
+            src=self.backgrounds[ActiveViewMode.HOME],
+            fit="cover",
+            width=float("inf"),
+            height=float("inf"),
+            error_content=ft.Container(
+                bgcolor="#121218",
+            ),
+        )
+
+        # Header navigation.
         self.header_nav = HeaderNav(
             on_open_filter=self._open_filter_modal,
             on_open_device=self._open_device_modal,
@@ -32,16 +54,15 @@ class AppShell(ft.Stack):
             on_open_timing=self._open_timing_modal,
         )
 
-        self.view_container = ft.Container(expand=True, padding=16)
+        # Active view container.
+        self.view_container = ft.Container(
+            expand=True,
+            padding=16,
+        )
 
+        # Main application layout.
         self.controls = [
-            ft.Image(
-                src="bg.png",
-                fit="cover",
-                width=float("inf"),
-                height=float("inf"),
-                error_content=ft.Container(bgcolor="#121218"),
-            ),
+            self.background_image,
             ft.Column(
                 controls=[
                     self.header_nav,
@@ -53,14 +74,33 @@ class AppShell(ft.Stack):
         ]
 
     def update_active_view(self, view_control: ft.Control) -> None:
+        """Update the active view and its corresponding background."""
+
+        current_view = self.app_state.current_view
+
+        # Select the appropriate background.
+        background = self.backgrounds.get(
+            current_view,
+            "home_bg.png",
+        )
+
+        self.background_image.src = background
+
+        # Update the displayed view.
         self.view_container.content = view_control
+
+        # Refresh the application.
         if self.app_page is not None:
             try:
                 self.app_page.update()
             except Exception:
                 pass
 
-    def _open_modal(self, modal: ft.AlertDialog, e: ft.ControlEvent = None) -> None:
+    def _open_modal(
+        self,
+        modal: ft.AlertDialog,
+        e: ft.ControlEvent = None,
+    ) -> None:
         target_page = (e.page if e else None) or self.app_page
 
         if target_page is not None:

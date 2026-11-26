@@ -274,7 +274,7 @@ def make_drop_d_configuration():
 def test_initial_state_defaults(app_state):
     state, _ = app_state
 
-    assert state.current_view == ActiveViewMode.TRAINER
+    assert state.current_view == ActiveViewMode.HOME
     assert state.trainer_mode == TrainerSubMode.SINGLE_NOTE
 
     assert state.target_note_name == "E"
@@ -328,7 +328,7 @@ def test_set_view_does_not_notify_when_unchanged(app_state):
     calls = []
 
     state.subscribe_view(lambda: calls.append("changed"))
-    state.set_view(ActiveViewMode.TRAINER)
+    state.set_view(ActiveViewMode.HOME)
 
     assert calls == []
 
@@ -603,6 +603,7 @@ def test_correct_fast_attempt_increments_hero_boss_progress(
 ):
     state, fake_db = app_state
 
+    state.set_view(ActiveViewMode.TRAINER)
     state.set_trainer_mode(trainer_mode)
 
     xp_counter_names = [
@@ -644,6 +645,7 @@ def test_incorrect_attempt_resets_only_relevant_hero_boss_progress(
 ):
     state, fake_db = app_state
 
+    state.set_view(ActiveViewMode.TRAINER)
     state.set_trainer_mode(trainer_mode)
 
     counters = [
@@ -682,6 +684,7 @@ def test_slow_correct_attempt_resets_only_relevant_hero_boss_progress(
 ):
     state, fake_db = app_state
 
+    state.set_view(ActiveViewMode.TRAINER)
     state.set_trainer_mode(trainer_mode)
 
     counters = [
@@ -926,6 +929,8 @@ def test_invalid_player_switch_preserves_current_player(app_state):
 
 def test_attempt_progress_is_isolated_between_players(app_state):
     state, fake_db = app_state
+
+    state.set_view(ActiveViewMode.TRAINER)
 
     # Give Player 1 some existing progress.
     fake_db.profiles[1].total_xp = 150

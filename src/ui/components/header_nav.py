@@ -38,16 +38,20 @@ class HeaderNav(ft.Container):
 
         # Navigation buttons
         self.btn_trainer = self._make_nav_btn(
-            "🎯 Trainer", ActiveViewMode.TRAINER
+            "🎯 Trainer",
+            ActiveViewMode.TRAINER,
         )
         self.btn_tuner = self._make_nav_btn(
-            "🎛️ Tuner", ActiveViewMode.TUNER
+            "🎛️ Tuner",
+            ActiveViewMode.TUNER,
         )
         self.btn_ear = self._make_nav_btn(
-            "🎧 Ear Training", ActiveViewMode.EAR_TRAINING
+            "🎧 Ear Training",
+            ActiveViewMode.EAR_TRAINING,
         )
         self.btn_analytics = self._make_nav_btn(
-            "📊 Analytics", ActiveViewMode.ANALYTICS
+            "📊 Analytics",
+            ActiveViewMode.ANALYTICS,
         )
 
         # Player management button
@@ -91,31 +95,47 @@ class HeaderNav(ft.Container):
             on_click=lambda e: self.on_open_timing(e),
         )
 
+        # Header layout
         self.content = ft.Row(
             controls=[
-                ft.Row(
-                    controls=[
-                        ft.Image(
-                            src="logo.png",
-                            width=28,
-                            height=28,
-                            error_content=ft.Icon(
-                                ft.Icons.SPEAKER_GROUP
+                # Clickable Bragi home link
+                ft.Container(
+                    content=ft.Row(
+                        controls=[
+                            ft.Image(
+                                src="logo.png",
+                                width=28,
+                                height=28,
+                                error_content=ft.Icon(
+                                    ft.Icons.SPEAKER_GROUP,
+                                ),
                             ),
-                        ),
-                        ft.Text(
-                            "BRAGI",
-                            size=20,
-                            weight=ft.FontWeight.BOLD,
-                            color=ft.Colors.WHITE,
-                        ),
-                    ],
-                    spacing=8,
+                            ft.Text(
+                                "BRAGI",
+                                size=20,
+                                weight=ft.FontWeight.BOLD,
+                                color=ft.Colors.WHITE,
+                            ),
+                        ],
+                        spacing=8,
+                    ),
+                    on_click=lambda _: self.app_state.set_view(
+                        ActiveViewMode.HOME
+                    ),
+                    ink=True,
+                    border_radius=8,
+                    tooltip="Home",
                 ),
+
                 ft.VerticalDivider(
                     width=1,
-                    color=ft.Colors.with_opacity(0.24, ft.Colors.WHITE),
+                    color=ft.Colors.with_opacity(
+                        0.24,
+                        ft.Colors.WHITE,
+                    ),
                 ),
+
+                # Main navigation
                 ft.Row(
                     controls=[
                         self.btn_trainer,
@@ -125,8 +145,14 @@ class HeaderNav(ft.Container):
                     ],
                     spacing=4,
                 ),
+
+                # Flexible spacing
                 ft.Container(expand=True),
+
+                # Player management
                 self.btn_players,
+
+                # Utility controls
                 ft.Row(
                     controls=[
                         btn_filter,
@@ -156,12 +182,14 @@ class HeaderNav(ft.Container):
         label: str,
         view_mode: ActiveViewMode,
     ) -> ft.Control:
+        """Create a navigation button."""
         return ft.Button(
             content=ft.Text(label),
             on_click=lambda _: self.app_state.set_view(view_mode),
         )
 
     def _update_button_styles(self) -> None:
+        """Update navigation button styles for the active view."""
         curr = self.app_state.current_view
 
         btns = [
@@ -178,10 +206,16 @@ class HeaderNav(ft.Container):
                 color=(
                     ft.Colors.CYAN_400
                     if is_active
-                    else ft.Colors.with_opacity(0.7, ft.Colors.WHITE)
+                    else ft.Colors.with_opacity(
+                        0.7,
+                        ft.Colors.WHITE,
+                    )
                 ),
                 bgcolor=(
-                    ft.Colors.with_opacity(0.2, ft.Colors.CYAN_700)
+                    ft.Colors.with_opacity(
+                        0.2,
+                        ft.Colors.CYAN_700,
+                    )
                     if is_active
                     else ft.Colors.TRANSPARENT
                 ),
