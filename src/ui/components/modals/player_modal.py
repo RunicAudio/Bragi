@@ -42,7 +42,7 @@ class PlayerModal(ft.AlertDialog):
                 weight=ft.FontWeight.BOLD,
             ),
             content=ft.Container(
-                width=380,
+                width=520,
                 content=ft.Column(
                     controls=[
                         ft.Text(
@@ -79,9 +79,8 @@ class PlayerModal(ft.AlertDialog):
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
-
     def _build_player_list(self) -> list[ft.Control]:
-        """Build a selectable row for each existing player."""
+        """Build selectable player rows with management actions."""
         players = self.app_state.db.get_players()
         active_id = self.app_state.active_player_id
 
@@ -89,6 +88,7 @@ class PlayerModal(ft.AlertDialog):
 
         for player in players:
             is_active = player.id == active_id
+            can_delete = len(players) > 1
 
             controls.append(
                 ft.Container(
@@ -126,8 +126,37 @@ class PlayerModal(ft.AlertDialog):
                                     ),
                                 )
                             ),
+                            ft.Button(
+                                content=ft.Text("Reset"),
+                                icon=ft.Icons.RESTART_ALT,
+                                on_click=lambda e, pid=player.id, name=player.name: (
+                                    self._show_reset_confirmation(pid, name, e)
+                                ),
+                            ),
+                            ft.IconButton(
+                                icon=ft.Icons.EDIT,
+                                icon_color=ft.Colors.CYAN_300,
+                                tooltip="Rename player",
+                                on_click=lambda e, pid=player.id, name=player.name: (
+                                    self._show_rename_dialog(pid, name, e)
+                                ),
+                            ),
+                            ft.IconButton(
+                                icon=ft.Icons.DELETE_OUTLINE,
+                                icon_color=ft.Colors.RED_300,
+                                tooltip=(
+                                    "Delete player"
+                                    if can_delete
+                                    else "Cannot delete the only player"
+                                ),
+                                disabled=not can_delete,
+                                on_click=lambda e, pid=player.id, name=player.name: (
+                                    self._show_delete_confirmation(pid, name, e)
+                                ),
+                            ),
                         ],
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=4,
                     ),
                     padding=10,
                     border_radius=8,
@@ -140,6 +169,222 @@ class PlayerModal(ft.AlertDialog):
             )
 
         return controls
+
+    def _show_rename_dialog(
+        self,
+        player_id: int,
+        player_name: str,
+        e: ft.ControlEvent,
+    ) -> None:
+        """Open a dialog for renaming a player."""
+        target_page = (e.page if e else None) or self.page
+
+        if target_page is None:
+            return
+
+        name_field = ft.TextField(
+            label="Player Name",
+            value=player_name,
+            autofocus=True,
+            width=300,
+        )
+
+        rename_error = ft.Text(
+            "",
+            color=ft.Colors.RED_300,
+            size=12,
+        )
+
+        confirmation = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Rename Player"),
+            content=ft.Column(
+                controls=[
+                    name_field,
+                    rename_error,
+                ],
+                tight=True,
+            ),
+            actions=[
+                ft.Button(
+                    content=ft.Text("Cancel"),
+                    on_click=lambda e: target_page.pop_dialog(),
+                ),
+                ft.Button(
+                    content=ft.Text("Save"),
+                    icon=ft.Icons.SAVE,
+                    on_click=lambda e: self._rename_player(
+                        player_id,
+                        name_field,
+                        rename_error,
+                        target_page,
+                    ),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        target_page.show_dialog(confirmation)
+
+
+    def _rename_player(
+        self,
+        player_id: int,
+        name_field: ft.TextField,
+        error_text: ft.Text,
+        target_page: ft.Page,
+    ) -> None:
+        """Save a player's new name and refresh the list."""
+        name = name_field.value or ""
+
+        if not name.strip():
+            error_text.value = "Player name cannot be empty."
+            error_text.update()
+            return
+
+        try:
+            self.app_state.rename_player(player_id, name)
+
+            target_page.pop_dialog()
+
+            self.error_text.value = ""
+            self.player_list.controls = self._build_player_list()
+            self.update()
+
+        except (ValueError, RuntimeError) as exc:
+            error_text.value = str(exc)
+            error_text.update()
+
+
+    def _show_delete_confirmation(
+        self,
+        player_id: int,
+        player_name: str,
+        e: ft.ControlEvent,
+    ) -> None:
+        """Ask for confirmation before permanently deleting a player."""
+        target_page = (e.page if e else None) or self.page
+
+        if target_page is None:
+            return
+
+        confirmation = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Delete Player?"),
+            content=ft.Text(
+                f"Are you sure you want to permanently delete "
+                f"{player_name}?\n\n"
+                "This will permanently remove:\n"
+                "• Player profile and progress\n"
+                "• XP and player level\n"
+                "• Practice history\n"
+                "• Unlocked badges\n"
+                "• Hero Boss progress\n"
+                "• Instrument and tuning configuration\n\n"
+                "This action cannot be undone."
+            ),
+            actions=[
+                ft.Button(
+                    content=ft.Text("Cancel"),
+                    on_click=lambda e: target_page.pop_dialog(),
+                ),
+                ft.Button(
+                    content=ft.Text("Delete Player"),
+                    icon=ft.Icons.DELETE_OUTLINE,
+                    on_click=lambda e: self._delete_player(
+                        player_id,
+                        target_page,
+                    ),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        target_page.show_dialog(confirmation)
+
+
+    def _delete_player(
+        self,
+        player_id: int,
+        target_page: ft.Page,
+    ) -> None:
+        """Delete a player and refresh the player list."""
+        try:
+            target_page.pop_dialog()
+
+            self.app_state.delete_player(player_id)
+
+            self.error_text.value = ""
+            self.player_list.controls = self._build_player_list()
+            self.update()
+
+        except (ValueError, RuntimeError) as exc:
+            self.error_text.value = str(exc)
+            self.update()
+
+    def _show_reset_confirmation(
+        self,
+        player_id: int,
+        player_name: str,
+        e: ft.ControlEvent,
+    ) -> None:
+        """Ask for confirmation before resetting a player's progress."""
+        target_page = (e.page if e else None) or self.page
+
+        if target_page is None:
+            return
+
+        confirmation = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Reset Player Progress?"),
+            content=ft.Text(
+                f"This will permanently reset all progress for "
+                f"{player_name}.\n\n"
+                "The following will be cleared:\n"
+                "• XP and player level\n"
+                "• Practice history\n"
+                "• Unlocked badges\n"
+                "• Hero Boss progress\n\n"
+                "The player profile and instrument configuration "
+                "will be preserved."
+            ),
+            actions=[
+                ft.Button(
+                    content=ft.Text("Cancel"),
+                    on_click=lambda e: target_page.pop_dialog(),
+                ),
+                ft.Button(
+                    content=ft.Text("Reset Progress"),
+                    icon=ft.Icons.RESTART_ALT,
+                    on_click=lambda e: self._reset_player_progress(
+                        player_id, target_page
+                    ),
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        target_page.show_dialog(confirmation)
+
+    def _reset_player_progress(
+        self,
+        player_id: int,
+        target_page: ft.Page,
+    ) -> None:
+        """Reset the selected player's progress and refresh the list."""
+        try:
+            target_page.pop_dialog()
+
+            self.app_state.reset_player_progress(player_id)
+
+            self.error_text.value = ""
+            self.player_list.controls = self._build_player_list()
+            self.update()
+
+        except (ValueError, RuntimeError) as exc:
+            self.error_text.value = str(exc)
+            self.update()
+
 
     def _select_player(self, player_id: int) -> None:
         """Activate an existing player and close the modal."""
@@ -180,9 +425,4 @@ class PlayerModal(ft.AlertDialog):
         target_page = (e.page if e else None) or self.page
 
         if target_page is not None:
-            if hasattr(target_page, "close"):
-                target_page.close(self)
-            else:
-                self.open = False
-                target_page.update()
-
+            target_page.pop_dialog()

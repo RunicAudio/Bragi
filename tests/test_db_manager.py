@@ -895,3 +895,115 @@ def test_failed_migration_rolls_back_all_schema_changes(
         ).fetchone()
 
         assert profile == (1, 750, 4, 9)
+
+def test_rename_player_updates_name_without_changing_progress(db):
+    player_id = db.create_player("Alex")
+
+    db.update_user_profile(
+        500, 5, 10, "2026-11-25", player_id=player_id
+    )
+    db.unlock_badge("tr_b1", player_id=player_id)
+
+    db.rename_player(player_id, "Alexander")
+
+    player = db.get_player(player_id)
+
+    assert player.name == "Alexander"
+    assert db.get_user_profile(player_id).total_xp == 500
+    assert "tr_b1" in db.get_unlocked_badge_ids(player_id)
+
+
+def test_rename_player_trims_whitespace(db):
+    player_id = db.create_player("Alex")
+
+    db.rename_player(player_id, "  Jordan  ")
+
+    assert db.get_player(player_id).name == "Jordan"
+
+
+def test_rename_player_rejects_empty_name(db):
+    with pytest.raises(ValueError):
+        db.rename_player(1, "   ")
+
+
+def test_rename_player_rejects_nonexistent_player(db):
+    with pytest.raises(ValueError):
+        db.rename_player(9999, "Alex")
+
+
+def test_delete_inactive_player_preserves_active_player(db):
+    player_id = db.create_player("Alex")
+    db.set_active_player_id(1)
+
+    resulting_active_id = db.delete_player(player_id)
+
+    assert resulting_active_id == 1
+    assert db.get_active_player_id() == 1
+    assert db.get_player(player_id) is None
+
+
+def test_delete_active_player_selects_another_player(db):
+    player_2 = db.create_player("Alex")
+    player_3 = db.create_player("Jordan")
+
+    assert db.get_active_player_id() == player_3
+
+    resulting_active_id = db.delete_player(player_3)
+
+    assert resulting_active_id == 1
+    assert db.get_active_player_id() == 1
+    assert db.get_player(player_3) is None
+    assert db.get_player(1) is not None
+    assert db.get_player(player_2) is not None
+
+
+def test_delete_player_cascades_all_player_data(db):
+    player_id = db.create_player("Alex")
+
+    db.update_user_profile(
+        500, 5, 10, "2026-11-25", player_id=player_id
+    )
+    db.log_attempt(
+        "TRAINER", "NOTES", "C4", 1.0, True, 10,
+        player_id=player_id,
+    )
+    db.unlock_badge("tr_b1", player_id=player_id)
+    db.update_hero_boss_progress(
+        10, 20, 30, player_id=player_id
+    )
+    db.save_instrument_configuration(
+        make_drop_d_configuration(),
+        player_id=player_id,
+    )
+
+    db.delete_player(player_id)
+
+    assert db.get_player(player_id) is None
+
+    with db._get_connection() as conn:
+        for table in (
+            "user_profile",
+            "practice_attempts",
+            "unlocked_badges",
+            "hero_boss_progress",
+            "player_instrument_configurations",
+        ):
+            result = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE player_id = ?",
+                (player_id,),
+            ).fetchone()[0]
+
+            assert result == 0, f"{table} still contains player data"
+
+
+def test_delete_last_remaining_player_is_rejected(db):
+    with pytest.raises(ValueError, match="last remaining player"):
+        db.delete_player(1)
+
+    assert db.get_player(1) is not None
+    assert db.get_active_player_id() == 1
+
+
+def test_delete_nonexistent_player_is_rejected(db):
+    with pytest.raises(ValueError):
+        db.delete_player(9999)

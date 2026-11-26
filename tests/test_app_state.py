@@ -26,6 +26,11 @@ class FakeDatabase:
     def __init__(self):
         self.active_player_id = 1
 
+        self.player_names = {
+            1: "Player 1",
+            2: "Player 2",
+        }
+
         # Independent data for each player.
         self.profiles = {
             1: UserProfileData(),
@@ -79,10 +84,63 @@ class FakeDatabase:
         return self.active_player_id
 
     def set_active_player_id(self, player_id):
-        if player_id not in self.profiles:
+        if player_id not in self.player_names:
             raise ValueError(f"Player {player_id} does not exist.")
 
         self.active_player_id = player_id
+
+    def rename_player(self, player_id, name):
+        name = name.strip()
+
+        if not name:
+            raise ValueError("Player name cannot be empty.")
+
+        if player_id not in self.player_names:
+            raise ValueError(f"Player {player_id} does not exist.")
+
+        self.player_names[player_id] = name
+
+    def delete_player(self, player_id):
+        if player_id not in self.profiles:
+            raise ValueError(f"Player {player_id} does not exist.")
+
+        if len(self.profiles) <= 1:
+            raise ValueError("Cannot delete the last remaining player.")
+
+        if player_id == self.active_player_id:
+            replacement_id = next(
+                pid for pid in self.profiles if pid != player_id
+            )
+            self.active_player_id = replacement_id
+
+        for collection in (
+            self.profiles,
+            self.badges_by_player,
+            self.bosses,
+            self.attempts_by_player,
+            self.instrument_configurations,
+            self.profile_updates_by_player,
+            self.boss_updates_by_player,
+            self.player_names,
+        ):
+            collection.pop(player_id, None)
+
+        return self.active_player_id
+
+    def reset_player_progress(self, player_id=None):
+        player_id = (
+            self.active_player_id if player_id is None else player_id
+        )
+
+        profile = self.profiles[player_id]
+        profile.total_xp = 0
+        profile.user_level = 1
+        profile.current_streak = 0
+        profile.last_practice_date = ""
+
+        self.attempts_by_player[player_id].clear()
+        self.badges_by_player[player_id].clear()
+        self.bosses[player_id] = HeroBossData()
 
         # Instrument configuration.
     def get_instrument_configuration(self, player_id=None):
@@ -216,7 +274,7 @@ def make_drop_d_configuration():
 def test_initial_state_defaults(app_state):
     state, _ = app_state
 
-    assert state.current_view == ActiveViewMode.TRAINER
+    assert state.current_view == ActiveViewMode.HOME
     assert state.trainer_mode == TrainerSubMode.SINGLE_NOTE
 
     assert state.target_note_name == "E"
@@ -270,7 +328,7 @@ def test_set_view_does_not_notify_when_unchanged(app_state):
     calls = []
 
     state.subscribe_view(lambda: calls.append("changed"))
-    state.set_view(ActiveViewMode.TRAINER)
+    state.set_view(ActiveViewMode.HOME)
 
     assert calls == []
 
@@ -545,6 +603,7 @@ def test_correct_fast_attempt_increments_hero_boss_progress(
 ):
     state, fake_db = app_state
 
+    state.set_view(ActiveViewMode.TRAINER)
     state.set_trainer_mode(trainer_mode)
 
     xp_counter_names = [
@@ -586,6 +645,7 @@ def test_incorrect_attempt_resets_only_relevant_hero_boss_progress(
 ):
     state, fake_db = app_state
 
+    state.set_view(ActiveViewMode.TRAINER)
     state.set_trainer_mode(trainer_mode)
 
     counters = [
@@ -624,6 +684,7 @@ def test_slow_correct_attempt_resets_only_relevant_hero_boss_progress(
 ):
     state, fake_db = app_state
 
+    state.set_view(ActiveViewMode.TRAINER)
     state.set_trainer_mode(trainer_mode)
 
     counters = [
@@ -869,6 +930,8 @@ def test_invalid_player_switch_preserves_current_player(app_state):
 def test_attempt_progress_is_isolated_between_players(app_state):
     state, fake_db = app_state
 
+    state.set_view(ActiveViewMode.TRAINER)
+
     # Give Player 1 some existing progress.
     fake_db.profiles[1].total_xp = 150
     fake_db.profiles[1].current_streak = 4
@@ -1005,3 +1068,226 @@ def test_set_instrument_configuration_rejects_invalid_type(app_state):
         fake_db.instrument_configurations[1]
         == original_configuration
     )
+
+def test_reset_active_player_progress_refreshes_app_state(app_state):
+    state, fake_db = app_state
+
+    fake_db.profiles[1] = UserProfileData(
+        total_xp=500,
+        user_level=4,
+        current_streak=12,
+        last_practice_date="2026-11-24",
+    )
+    fake_db.badges_by_player[1] = {"tr_b1", "an_b2"}
+    fake_db.attempts_by_player[1].append({"is_correct": True})
+    fake_db.bosses[1] = HeroBossData(
+        consecutive_notes=5,
+        consecutive_chords=3,
+        consecutive_arpeggios=2,
+    )
+
+    configuration = make_drop_d_configuration()
+    state.set_instrument_configuration(configuration)
+
+    view_notifications = []
+    gamification_notifications = []
+
+    state.subscribe_view(lambda: view_notifications.append(True))
+    state.subscribe_gamification(
+        lambda: gamification_notifications.append(True)
+    )
+
+    state.reset_player_progress(1)
+
+    assert state.user_profile.total_xp == 0
+    assert state.user_profile.user_level == 1
+    assert state.user_profile.current_streak == 0
+    assert state.user_profile.last_practice_date == ""
+
+    assert state.unlocked_badge_ids == set()
+    assert state.hero_boss.consecutive_notes_under_2s == 0
+    assert state.hero_boss.consecutive_chords_under_2s == 0
+    assert state.hero_boss.consecutive_arpeggios_under_2s == 0
+
+    assert fake_db.attempts_by_player[1] == []
+    assert state.instrument_configuration == configuration
+
+    assert len(view_notifications) == 1
+    assert len(gamification_notifications) == 1
+
+
+def test_reset_inactive_player_does_not_change_active_state(app_state):
+    state, fake_db = app_state
+
+    fake_db.profiles[1].total_xp = 250
+    fake_db.profiles[2].total_xp = 500
+    fake_db.badges_by_player[2] = {"tr_b1"}
+    fake_db.attempts_by_player[2].append({"is_correct": True})
+
+    view_notifications = []
+    gamification_notifications = []
+
+    state.subscribe_view(lambda: view_notifications.append(True))
+    state.subscribe_gamification(
+        lambda: gamification_notifications.append(True)
+    )
+
+    state.reset_player_progress(2)
+
+    assert state.active_player_id == 1
+    assert state.user_profile.total_xp == 250
+
+    assert fake_db.profiles[2].total_xp == 0
+    assert fake_db.profiles[2].user_level == 1
+    assert fake_db.badges_by_player[2] == set()
+    assert fake_db.attempts_by_player[2] == []
+
+    assert view_notifications == []
+    assert gamification_notifications == []
+
+# ============================================================
+# PLAYER RENAME AND DELETE
+# ============================================================
+
+def test_rename_player_updates_name_without_changing_progress(app_state):
+    state, fake_db = app_state
+
+    fake_db.profiles[1].total_xp = 500
+    fake_db.profiles[1].user_level = 4
+    fake_db.badges_by_player[1].add("tr_b1")
+
+    state.rename_player(1, "Arty")
+
+    assert fake_db.player_names[1] == "Arty"
+    assert state.user_profile.total_xp == 500
+    assert state.user_profile.user_level == 4
+    assert "tr_b1" in state.unlocked_badge_ids
+
+
+def test_rename_player_notifies_view_listeners(app_state):
+    state, _ = app_state
+    notifications = []
+
+    state.subscribe_view(lambda: notifications.append(True))
+
+    state.rename_player(1, "New Name")
+
+    assert len(notifications) == 1
+
+
+def test_rename_invalid_player_raises_value_error(app_state):
+    state, _ = app_state
+
+    with pytest.raises(ValueError):
+        state.rename_player(999, "Invalid")
+
+
+def test_delete_inactive_player_preserves_active_state(app_state):
+    state, fake_db = app_state
+
+    fake_db.profiles[1].total_xp = 250
+    original_profile = state.user_profile
+
+    resulting_active_id = state.delete_player(2)
+
+    assert resulting_active_id == 1
+    assert state.active_player_id == 1
+    assert fake_db.active_player_id == 1
+    assert state.user_profile is original_profile
+    assert 2 not in fake_db.profiles
+
+
+def test_delete_active_player_loads_replacement_state(app_state):
+    state, fake_db = app_state
+
+    fake_db.profiles[2] = UserProfileData(
+        total_xp=750,
+        user_level=6,
+        current_streak=12,
+        last_practice_date="2026-11-25",
+    )
+    fake_db.badges_by_player[2] = {"tr_b1", "an_b2"}
+    fake_db.bosses[2] = HeroBossData(
+        consecutive_notes=10,
+        consecutive_chords=20,
+        consecutive_arpeggios=30,
+    )
+
+    drop_d = make_drop_d_configuration()
+    fake_db.instrument_configurations[2] = drop_d
+
+    resulting_active_id = state.delete_player(1)
+
+    assert resulting_active_id == 2
+    assert state.active_player_id == 2
+
+    assert state.user_profile.total_xp == 750
+    assert state.user_profile.user_level == 6
+    assert state.user_profile.current_streak == 12
+
+    assert state.unlocked_badge_ids == {"tr_b1", "an_b2"}
+
+    assert state.hero_boss.consecutive_notes_under_2s == 10
+    assert state.hero_boss.consecutive_chords_under_2s == 20
+    assert state.hero_boss.consecutive_arpeggios_under_2s == 30
+
+    assert state.instrument_configuration == drop_d
+
+    assert 1 not in fake_db.profiles
+
+
+def test_delete_active_player_notifies_listeners(app_state):
+    state, _ = app_state
+
+    view_notifications = []
+    gamification_notifications = []
+
+    state.subscribe_view(
+        lambda: view_notifications.append(True)
+    )
+    state.subscribe_gamification(
+        lambda: gamification_notifications.append(True)
+    )
+
+    state.delete_player(1)
+
+    assert len(view_notifications) == 1
+    assert len(gamification_notifications) == 1
+
+
+def test_delete_inactive_player_only_notifies_view(app_state):
+    state, _ = app_state
+
+    view_notifications = []
+    gamification_notifications = []
+
+    state.subscribe_view(
+        lambda: view_notifications.append(True)
+    )
+    state.subscribe_gamification(
+        lambda: gamification_notifications.append(True)
+    )
+
+    state.delete_player(2)
+
+    assert len(view_notifications) == 1
+    assert len(gamification_notifications) == 0
+
+
+def test_delete_nonexistent_player_raises_value_error(app_state):
+    state, _ = app_state
+
+    with pytest.raises(ValueError):
+        state.delete_player(999)
+
+
+def test_delete_last_remaining_player_is_rejected(app_state):
+    state, fake_db = app_state
+
+    fake_db.delete_player(2)
+
+    with pytest.raises(ValueError, match="last remaining player"):
+        state.delete_player(1)
+
+    assert state.active_player_id == 1
+    assert 1 in fake_db.profiles

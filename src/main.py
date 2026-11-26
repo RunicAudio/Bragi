@@ -21,6 +21,7 @@ from ui.views.analytics_view import AnalyticsView
 from ui.views.ear_training_view import EarTrainingView
 from ui.views.trainer_view import TrainerView
 from ui.views.tuner_view import TunerView
+from ui.views.home_view import HomeView
 
 
 def main(page: ft.Page) -> None:
@@ -36,6 +37,7 @@ def main(page: ft.Page) -> None:
     page.add(shell)
 
     # Subviews
+    home_view = HomeView()
     trainer_view = TrainerView()
     tuner_view = TunerView()
     ear_view = EarTrainingView()
@@ -43,7 +45,10 @@ def main(page: ft.Page) -> None:
 
     def route_view() -> None:
         view_mode = app_state.current_view
-        if view_mode == ActiveViewMode.TRAINER:
+
+        if view_mode == ActiveViewMode.HOME:
+            shell.update_active_view(home_view)
+        elif view_mode == ActiveViewMode.TRAINER:
             shell.update_active_view(trainer_view)
         elif view_mode == ActiveViewMode.TUNER:
             shell.update_active_view(tuner_view)
@@ -76,4 +81,7 @@ def main(page: ft.Page) -> None:
 
 
 if __name__ == "__main__":
-    ft.run(main)
+    ft.run(
+        main,
+        assets_dir=str(SRC_DIR.parent / "assets"),
+    )

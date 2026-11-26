@@ -518,6 +518,105 @@ class DatabaseManager:
 
             conn.commit()
 
+    def rename_player(self, player_id: int, name: str) -> None:
+        """Rename an existing player without changing their progress."""
+        name = name.strip()
+
+        if not name:
+            raise ValueError("Player name cannot be empty.")
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE players
+                SET name = ?
+                WHERE id = ?
+                """,
+                (name, player_id),
+            )
+
+            if cursor.rowcount == 0:
+                raise ValueError(f"Player {player_id} does not exist.")
+
+            conn.commit()
+
+    def delete_player(self, player_id: int) -> int:
+        """
+        Delete a player and all associated data.
+
+        If the deleted player was active, the first remaining player
+        becomes active.
+
+        Returns the ID of the resulting active player.
+        """
+        with self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            player = conn.execute(
+                "SELECT id FROM players WHERE id = ?",
+                (player_id,),
+            ).fetchone()
+
+            if player is None:
+                raise ValueError(f"Player {player_id} does not exist.")
+
+            player_count = conn.execute(
+                "SELECT COUNT(*) FROM players"
+            ).fetchone()[0]
+
+            if player_count <= 1:
+                raise ValueError(
+                    "Cannot delete the last remaining player."
+                )
+
+            active_row = conn.execute(
+                """
+                SELECT setting_value
+                FROM app_settings
+                WHERE setting_key = 'active_player_id'
+                """
+            ).fetchone()
+
+            active_player_id = (
+                int(active_row["setting_value"])
+                if active_row
+                else 1
+            )
+
+            if player_id == active_player_id:
+                replacement = conn.execute(
+                    """
+                    SELECT id
+                    FROM players
+                    WHERE id != ?
+                    ORDER BY id
+                    LIMIT 1
+                    """,
+                    (player_id,),
+                ).fetchone()
+
+                new_active_player_id = replacement["id"]
+
+                conn.execute(
+                    """
+                    UPDATE app_settings
+                    SET setting_value = ?
+                    WHERE setting_key = 'active_player_id'
+                    """,
+                    (str(new_active_player_id),),
+                )
+            else:
+                new_active_player_id = active_player_id
+
+            conn.execute(
+                "DELETE FROM players WHERE id = ?",
+                (player_id,),
+            )
+
+            conn.commit()
+
+            return new_active_player_id
+
     def _resolve_player_id(self, player_id: Optional[int]) -> int:
         resolved = (
             self.get_active_player_id()

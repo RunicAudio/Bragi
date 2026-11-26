@@ -35,8 +35,21 @@ class TrainerView(ft.Container):
         self.txt_mode = ft.Text("", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.CYAN_400)
         self.txt_xp = ft.Text(f"XP: {self.app_state.user_profile.total_xp} (Lvl {self.app_state.user_profile.user_level})", size=14, color=ft.Colors.GREEN_400)
         self.txt_streak = ft.Text(f"Streak: {self.app_state.user_profile.current_streak}", size=14, color=ft.Colors.AMBER_400)
-        self.txt_target = ft.Text("", size=32, weight=ft.FontWeight.BOLD, color=ft.Colors.WHITE)
-        self.txt_subtitle = ft.Text("", size=16, color=ft.Colors.with_opacity(0.7, ft.Colors.WHITE))
+        self.txt_target = ft.Text(
+            "",
+            size=48,
+            weight=ft.FontWeight.BOLD,
+            color=ft.Colors.WHITE,
+            text_align=ft.TextAlign.CENTER,
+        )
+
+        self.txt_subtitle = ft.Text(
+            "",
+            size=16,
+            color=ft.Colors.with_opacity(0.85, ft.Colors.WHITE),
+            text_align=ft.TextAlign.CENTER,
+        )
+
         self.txt_live_note = ft.Text("--", size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.RED_400)
 
         self.btn_hint = ft.Button(
@@ -68,37 +81,67 @@ class TrainerView(ft.Container):
     def _build_layout(self) -> ft.Control:
         return ft.Column(
             controls=[
+                # Top status row — preserve existing layout.
                 ft.Row(
                     controls=[
                         self.txt_mode,
-                        ft.Row(controls=[self.txt_xp, self.txt_streak], spacing=16),
+                        ft.Row(
+                            controls=[self.txt_xp, self.txt_streak],
+                            spacing=16,
+                        ),
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 ),
+
+                # Circular target display.
                 ft.Container(
+                    width=340,
+                    height=340,
+                    border=ft.Border.all(
+                        4,
+                        ft.Colors.AMBER_400,
+                    ),
+                    border_radius=170,
+                    bgcolor=ft.Colors.with_opacity(
+                        0.55,
+                        "#282A36",
+                    ),
+                    alignment=ft.Alignment.CENTER,
+                    padding=28,
                     content=ft.Column(
                         controls=[
-                            self.txt_target,
                             self.txt_subtitle,
-                            ft.Divider(height=20, color=ft.Colors.with_opacity(0.24, ft.Colors.WHITE)),
+                            self.txt_target,
+                            ft.Container(height=8),
                             ft.Row(
                                 controls=[
-                                    ft.Text("Live Detected: ", size=14, color=ft.Colors.with_opacity(0.6, ft.Colors.WHITE)),
+                                    ft.Text(
+                                        "Live Detected:",
+                                        size=14,
+                                        color=ft.Colors.with_opacity(
+                                            0.7,
+                                            ft.Colors.WHITE,
+                                        ),
+                                    ),
                                     self.txt_live_note,
                                 ],
                                 alignment=ft.MainAxisAlignment.CENTER,
+                                spacing=6,
                             ),
                         ],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                         alignment=ft.MainAxisAlignment.CENTER,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=12,
+                        tight=True,
                     ),
-                    bgcolor=ft.Colors.with_opacity(0.8, "#282A36"),
-                    border_radius=16,
-                    padding=32,
-                    alignment=ft.Alignment.CENTER,
                 ),
+
+                # Existing Hint and Skip buttons — unchanged.
                 ft.Row(
-                    controls=[self.btn_hint, self.btn_skip],
+                    controls=[
+                        self.btn_hint,
+                        self.btn_skip,
+                    ],
                     alignment=ft.MainAxisAlignment.CENTER,
                     spacing=16,
                 ),
@@ -115,14 +158,30 @@ class TrainerView(ft.Container):
         self.txt_xp.value = f"XP: {self.app_state.user_profile.total_xp} (Lvl {self.app_state.user_profile.user_level})"
 
         if mode == TrainerSubMode.SINGLE_NOTE:
-            self.txt_target.value = f"Play Note: {self.app_state.target_note_name}"
-            self.txt_subtitle.value = f"String {self.app_state.target_string_num}"
+            string_number = self.app_state.target_string_num
+            configuration = self.app_state.instrument_configuration
+
+            try:
+                open_string_note = configuration.get_string(
+                    string_number
+                ).note
+
+                self.txt_subtitle.value = (
+                    f"String {string_number} ({open_string_note})"
+                )
+
+            except ValueError:
+                self.txt_subtitle.value = f"String {string_number}"
+
+            self.txt_target.value = self.app_state.target_note_name
+
         elif mode == TrainerSubMode.STRUMMED_CHORD:
-            self.txt_target.value = f"Strum Chord: {self.app_state.target_chord_name}"
-            self.txt_subtitle.value = "Strum all chord tones simultaneously"
+            self.txt_target.value = self.app_state.target_chord_name
+            self.txt_subtitle.value = "STRUM CHORD"
+
         else:
-            self.txt_target.value = f"Arpeggiate: {self.app_state.target_chord_name}"
-            self.txt_subtitle.value = "Pick individual notes within 2.5s window"
+            self.txt_target.value = self.app_state.target_chord_name
+            self.txt_subtitle.value = "ARPEGGIATE CHORD"
 
     def _on_pitch_changed(self) -> None:
         if self.page is not None and self.app_state.current_view == ActiveViewMode.TRAINER:
@@ -196,7 +255,10 @@ class TrainerView(ft.Container):
         mode = self.app_state.trainer_mode
         if mode == TrainerSubMode.SINGLE_NOTE:
             new_note = random.choice(CHROMATIC_SHARPS)
-            new_string = random.randint(1, 6)
+            new_string = random.randint(
+                1,
+                self.app_state.instrument_configuration.string_count,
+            )
             self.app_state.target_note_name = new_note
             self.app_state.target_string_num = new_string
         else:
