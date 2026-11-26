@@ -6,7 +6,7 @@ Bragi is a desktop music-practice application for guitarists and other fretted-s
 
 Bragi is built with Python and Flet. Its audio pipeline uses SoundDevice/PortAudio, NumPy, and SciPy-compatible numerical processing. Music theory, application state, and local persistence are separated into dedicated modules.
 
-> **Project status — Beta:** The current release line is **0.2.0**. The `v0.2.0-beta.1` tag has been pushed and the Windows release workflow is being validated. The workflow is configured to publish a Windows installer and portable ZIP when its build and tests succeed. Check [GitHub Actions](https://github.com/RunicAudio/Bragi/actions) and [Releases](https://github.com/RunicAudio/Bragi/releases) for the latest status and available downloads.
+> **Project status — Beta:** The current release line is **0.2.0**, and the `v0.2.0-beta.1` tag has been pushed. The first tagged CI run passed all **790 automated tests**, but the Windows packaging step failed because the runner did not have a usable Flutter SDK and Flet’s attempt to prompt for one failed in the non-interactive Windows console. No Windows installer or portable ZIP has been published yet. See the [tagged workflow run](https://github.com/RunicAudio/Bragi/actions/runs/45776811119), [GitHub Actions](https://github.com/RunicAudio/Bragi/actions), and [Releases](https://github.com/RunicAudio/Bragi/releases) for updates.
 
 ## What Bragi Does
 
@@ -147,7 +147,7 @@ Bragi does not yet validate a specific fretboard position, complete guitar voici
 
 ### Current beta distribution target
 
-The current automated release workflow builds **Windows x64** packages:
+The automated release workflow is intended to build **Windows x64** packages. The workflow definition is in place, but the first tagged build has not completed packaging successfully yet: the test stage passed (790 tests), while the Flet build stage stopped because Flutter was not available on the hosted runner and the CLI could not complete its interactive setup prompt. The CI environment must be corrected before downloadable packages are available.
 
 - **Installer:** `Bragi-0.2.0-setup.exe`
 - **Portable archive:** `Bragi-0.2.0-Windows-x64.zip`
