@@ -136,6 +136,55 @@ class AppState:
 
         return True
 
+    def reset_player_progress(self, player_id: Optional[int] = None) -> None:
+        """Reset one player's progress and refresh state if they are active."""
+
+        target_player_id = (
+            self.active_player_id if player_id is None else player_id
+        )
+
+        self.db.reset_player_progress(player_id=target_player_id)
+
+        # Do not disturb the currently active player's state when
+        # resetting another player.
+        if target_player_id != self.active_player_id:
+            return
+
+        self._load_player_data()
+        self.reset_target_timer()
+        self.notify_gamification_changed()
+        self.notify_view_changed()
+
+    def rename_player(self, player_id: int, name: str) -> None:
+        """Rename a player without affecting their progression."""
+        self.db.rename_player(player_id, name)
+
+        # Refresh in-memory state if the active player was renamed.
+        if player_id == self.active_player_id:
+            self._load_player_data()
+
+        self.notify_view_changed()
+        
+    def delete_player(self, player_id: int) -> int:
+        """
+        Delete a player and refresh application state if necessary.
+
+        Returns the resulting active player ID.
+        """
+        previous_active_id = self.active_player_id
+
+        new_active_id = self.db.delete_player(player_id)
+
+        if player_id == previous_active_id:
+            self.active_player_id = new_active_id
+            self._load_player_data()
+            self.reset_target_timer()
+            self.notify_gamification_changed()
+
+        self.notify_view_changed()
+
+        return new_active_id
+
     @classmethod
     def get_instance(cls) -> "AppState":
         if cls._instance is None:
