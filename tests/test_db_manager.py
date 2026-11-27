@@ -60,6 +60,8 @@ def test_database_initializes_all_tables(db):
         "practice_attempts",
         "unlocked_badges",
         "hero_boss_progress",
+        "ear_training_progress",
+        "ear_training_attempts",
     }.issubset(table_names)
 
 
@@ -83,6 +85,13 @@ def test_database_creates_default_hero_boss_progress(db):
         consecutive_arpeggios=0,
     )
 
+def test_database_creates_default_ear_training_progress(db):
+    progress = db.get_ear_training_progress()
+
+    assert progress == {
+        "current_level": 1,
+        "unlocked_level": 1,
+    }
 
 def test_database_reinitialization_preserves_existing_data(db):
     db.update_user_profile(
@@ -780,7 +789,7 @@ def test_legacy_database_migrates_all_data_to_player_one(
             "PRAGMA user_version"
         ).fetchone()[0]
 
-        assert version == 2
+        assert version == 3
         instrument_row = conn.execute(
             """
             SELECT configuration_json
@@ -1042,3 +1051,171 @@ def test_settings_are_global_across_players(db):
 def test_set_setting_rejects_empty_key(db):
     with pytest.raises(ValueError, match="Setting key cannot be empty"):
         db.set_setting("   ", "value")
+
+# ============================================================
+# EAR TRAINING
+# ============================================================
+
+def test_ear_training_progress_is_player_scoped(db):
+    player_2 = db.create_player("Alex")
+
+    db.update_ear_training_progress(
+        current_level=2,
+        unlocked_level=3,
+        player_id=1,
+    )
+
+    assert db.get_ear_training_progress(1) == {
+        "current_level": 2,
+        "unlocked_level": 3,
+    }
+
+    assert db.get_ear_training_progress(player_2) == {
+        "current_level": 1,
+        "unlocked_level": 1,
+    }
+
+
+def test_ear_training_progress_rejects_invalid_levels(db):
+    with pytest.raises(ValueError):
+        db.update_ear_training_progress(0, 1)
+
+    with pytest.raises(ValueError):
+        db.update_ear_training_progress(5, 5)
+
+    with pytest.raises(ValueError):
+        db.update_ear_training_progress(3, 2)
+
+
+def test_ear_training_progress_cannot_relock_levels(db):
+    db.update_ear_training_progress(2, 3)
+
+    db.update_ear_training_progress(1, 1)
+
+    progress = db.get_ear_training_progress()
+
+    assert progress["current_level"] == 1
+    assert progress["unlocked_level"] == 3
+
+
+def test_ear_training_attempts_are_player_scoped(db):
+    player_2 = db.create_player("Alex")
+
+    db.log_ear_training_attempt(
+        level=1,
+        exercise_type="single_pitch",
+        target_answer="C4",
+        submitted_answer="C4",
+        is_correct=True,
+        response_time_sec=1.5,
+        replay_count=0,
+        player_id=1,
+    )
+
+    db.log_ear_training_attempt(
+        level=2,
+        exercise_type="interval",
+        target_answer="Perfect Fifth",
+        submitted_answer="Perfect Fourth",
+        is_correct=False,
+        response_time_sec=2.0,
+        replay_count=1,
+        player_id=player_2,
+    )
+
+    assert len(db.get_ear_training_attempts(1)) == 1
+    assert len(db.get_ear_training_attempts(player_2)) == 1
+    assert db.get_ear_training_attempts(1)[0]["target_answer"] == "C4"
+
+
+def test_ear_training_attempts_can_be_filtered_by_level(db):
+    for level, note in (
+        (1, "C4"),
+        (2, "D4"),
+        (1, "E4"),
+        (3, "F4"),
+        (1, "G4"),
+    ):
+        db.log_ear_training_attempt(
+            level=level,
+            exercise_type="single_pitch",
+            target_answer=note,
+            submitted_answer=note,
+            is_correct=True,
+            response_time_sec=1.0,
+            replay_count=0,
+        )
+
+    level_1 = db.get_ear_training_attempts(level=1)
+    level_2 = db.get_ear_training_attempts(level=2)
+
+    assert len(level_1) == 3
+    assert len(level_2) == 1
+    assert all(attempt["level"] == 1 for attempt in level_1)
+    assert level_2[0]["target_answer"] == "D4"
+
+
+def test_ear_training_attempts_level_filter_respects_limit(db):
+    for note in ("C4", "D4", "E4"):
+        db.log_ear_training_attempt(
+            level=1,
+            exercise_type="single_pitch",
+            target_answer=note,
+            submitted_answer=note,
+            is_correct=True,
+            response_time_sec=1.0,
+            replay_count=0,
+        )
+
+    attempts = db.get_ear_training_attempts(level=1, limit=2)
+
+    assert len(attempts) == 2
+    assert attempts[0]["target_answer"] == "E4"
+    assert attempts[1]["target_answer"] == "D4"
+
+
+@pytest.mark.parametrize("level", [0, 5, -1, True, 1.5, "1"])
+def test_ear_training_attempts_reject_invalid_level(db, level):
+    with pytest.raises(ValueError):
+        db.get_ear_training_attempts(level=level)
+
+def test_ear_training_analytics_calculates_accuracy(db):
+    for correct in (True, True, False, True):
+        db.log_ear_training_attempt(
+            level=1,
+            exercise_type="single_pitch",
+            target_answer="C4",
+            submitted_answer="C4" if correct else "D4",
+            is_correct=correct,
+            response_time_sec=2.0,
+            replay_count=0,
+        )
+
+    analytics = db.get_ear_training_analytics()
+
+    assert analytics["total_attempts"] == 4
+    assert analytics["correct_attempts"] == 3
+    assert analytics["accuracy_percentage"] == 75.0
+
+
+def test_reset_player_progress_resets_ear_training(db):
+    db.update_ear_training_progress(3, 4)
+
+    db.log_ear_training_attempt(
+        level=3,
+        exercise_type="chord_identification",
+        target_answer="A Minor",
+        submitted_answer="A Minor",
+        is_correct=True,
+        response_time_sec=1.0,
+        replay_count=0,
+    )
+
+    db.reset_player_progress()
+
+    assert db.get_ear_training_progress() == {
+        "current_level": 1,
+        "unlocked_level": 1,
+    }
+
+    assert db.get_ear_training_attempts() == []

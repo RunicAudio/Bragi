@@ -85,9 +85,12 @@ class DatabaseManager:
             if version < 2:
                 self._migrate_to_instrument_configurations(conn)
 
+            if version < 3:
+                self._migrate_to_ear_training(conn)
+
             self._create_missing_rows(conn)
 
-            conn.execute("PRAGMA user_version = 2")
+            conn.execute("PRAGMA user_version = 3")
             conn.commit()
 
     def _migrate_to_multi_player(self, conn: sqlite3.Connection) -> None:
@@ -256,6 +259,67 @@ class DatabaseManager:
                 (player["id"], configuration_json),
             )
 
+    def _migrate_to_ear_training(
+        self,
+        conn: sqlite3.Connection,
+    ) -> None:
+        """Add persistent Ear Training progression and attempt history."""
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ear_training_progress (
+                player_id INTEGER PRIMARY KEY,
+                current_level INTEGER NOT NULL DEFAULT 1,
+                unlocked_level INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (player_id)
+                    REFERENCES players(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ear_training_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                player_id INTEGER NOT NULL,
+                timestamp REAL NOT NULL,
+                level INTEGER NOT NULL,
+                exercise_type TEXT NOT NULL,
+                target_answer TEXT NOT NULL,
+                submitted_answer TEXT NOT NULL,
+                is_correct INTEGER NOT NULL,
+                response_time_sec REAL NOT NULL,
+                replay_count INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (player_id)
+                    REFERENCES players(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ear_training_attempts_player
+            ON ear_training_attempts(player_id)
+            """
+        )
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO ear_training_progress (
+                player_id,
+                current_level,
+                unlocked_level,
+                updated_at
+            )
+            SELECT id, 1, 1, ?
+            FROM players
+            """,
+            (now,),
+        )
+
     def _create_schema(self, conn: sqlite3.Connection) -> None:
         """Create the multi-player schema within the caller's transaction."""
 
@@ -362,6 +426,22 @@ class DatabaseManager:
 
             conn.execute(
                 """
+                INSERT OR IGNORE INTO ear_training_progress (
+                    player_id,
+                    current_level,
+                    unlocked_level,
+                    updated_at
+                )
+                VALUES (?, 1, 1, ?)
+                """,
+                (
+                    player_id,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+            conn.execute(
+                """
                 INSERT OR IGNORE INTO player_instrument_configurations (
                     player_id,
                     configuration_json
@@ -453,6 +533,22 @@ class DatabaseManager:
             conn.execute(
                 "INSERT INTO hero_boss_progress (player_id) VALUES (?)",
                 (player_id,),
+            )
+
+            conn.execute(
+                """
+                INSERT INTO ear_training_progress (
+                    player_id,
+                    current_level,
+                    unlocked_level,
+                    updated_at
+                )
+                VALUES (?, 1, 1, ?)
+                """,
+                (
+                    player_id,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
             )
 
             default_configuration = get_standard_configuration(
@@ -908,6 +1004,321 @@ class DatabaseManager:
             }
 
     # ============================================================
+    # EAR TRAINING PROGRESSION AND ANALYTICS
+    # ============================================================
+
+    def get_ear_training_progress(
+        self,
+        player_id: Optional[int] = None,
+    ) -> Dict[str, int]:
+        player_id = self._resolve_player_id(player_id)
+
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT current_level, unlocked_level
+                FROM ear_training_progress
+                WHERE player_id = ?
+                """,
+                (player_id,),
+            ).fetchone()
+
+            if row is None:
+                raise ValueError("Ear Training progress not found.")
+
+            return {
+                "current_level": row["current_level"],
+                "unlocked_level": row["unlocked_level"],
+            }
+
+    def update_ear_training_progress(
+        self,
+        current_level: int,
+        unlocked_level: int,
+        player_id: Optional[int] = None,
+    ) -> None:
+        player_id = self._resolve_player_id(player_id)
+
+        for name, value in (
+            ("current_level", current_level),
+            ("unlocked_level", unlocked_level),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 1 <= value <= 4
+            ):
+                raise ValueError(
+                    f"{name} must be an integer between 1 and 4."
+                )
+
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT unlocked_level
+                FROM ear_training_progress
+                WHERE player_id = ?
+                """,
+                (player_id,),
+            ).fetchone()
+
+            if row is None:
+                raise ValueError("Ear Training progress not found.")
+
+            effective_unlocked = max(
+                row["unlocked_level"],
+                unlocked_level,
+            )
+
+            if current_level > effective_unlocked:
+                raise ValueError(
+                    "Cannot select a locked Ear Training level."
+                )
+
+            conn.execute(
+                """
+                UPDATE ear_training_progress
+                SET current_level = ?,
+                    unlocked_level = ?,
+                    updated_at = ?
+                WHERE player_id = ?
+                """,
+                (
+                    current_level,
+                    effective_unlocked,
+                    datetime.now(timezone.utc).isoformat(),
+                    player_id,
+                ),
+            )
+
+            conn.commit()
+
+    def log_ear_training_attempt(
+        self,
+        level: int,
+        exercise_type: str,
+        target_answer: str,
+        submitted_answer: str,
+        is_correct: bool,
+        response_time_sec: float,
+        replay_count: int,
+        player_id: Optional[int] = None,
+    ) -> None:
+        player_id = self._resolve_player_id(player_id)
+
+        if isinstance(level, bool) or not isinstance(level, int) or not 1 <= level <= 4:
+            raise ValueError("Level must be an integer between 1 and 4.")
+
+        if not isinstance(exercise_type, str) or not exercise_type.strip():
+            raise ValueError("Exercise type cannot be empty.")
+
+        if not isinstance(target_answer, str) or not target_answer.strip():
+            raise ValueError("Target answer cannot be empty.")
+
+        if not isinstance(submitted_answer, str):
+            raise ValueError("Submitted answer must be a string.")
+
+        if not isinstance(is_correct, bool):
+            raise ValueError("is_correct must be a boolean.")
+
+        if (
+            isinstance(response_time_sec, bool)
+            or not isinstance(response_time_sec, (int, float))
+            or response_time_sec < 0
+        ):
+            raise ValueError("Response time must be non-negative.")
+
+        if (
+            isinstance(replay_count, bool)
+            or not isinstance(replay_count, int)
+            or replay_count < 0
+        ):
+            raise ValueError("Replay count must be a non-negative integer.")
+
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO ear_training_attempts (
+                    player_id,
+                    timestamp,
+                    level,
+                    exercise_type,
+                    target_answer,
+                    submitted_answer,
+                    is_correct,
+                    response_time_sec,
+                    replay_count
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    player_id,
+                    time.time(),
+                    level,
+                    exercise_type.strip(),
+                    target_answer.strip(),
+                    submitted_answer.strip(),
+                    1 if is_correct else 0,
+                    float(response_time_sec),
+                    replay_count,
+                ),
+            )
+
+            conn.commit()
+
+    def get_ear_training_attempts(
+        self,
+        player_id: Optional[int] = None,
+        limit: Optional[int] = None,
+        level: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        player_id = self._resolve_player_id(player_id)
+
+        if limit is not None:
+            if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or limit < 1
+            ):
+                raise ValueError("Limit must be a positive integer.")
+
+        if level is not None:
+            if (
+                isinstance(level, bool)
+                or not isinstance(level, int)
+                or not 1 <= level <= 4
+            ):
+                raise ValueError("Level must be an integer between 1 and 4.")
+
+        query = """
+            SELECT
+                id,
+                timestamp,
+                level,
+                exercise_type,
+                target_answer,
+                submitted_answer,
+                is_correct,
+                response_time_sec,
+                replay_count
+            FROM ear_training_attempts
+            WHERE player_id = ?
+        """
+
+        parameters: tuple = (player_id,)
+
+        if level is not None:
+            query += " AND level = ?"
+            parameters += (level,)
+
+        query += " ORDER BY timestamp DESC, id DESC"
+
+        if limit is not None:
+            query += " LIMIT ?"
+            parameters += (limit,)
+
+        with self._get_connection() as conn:
+            rows = conn.execute(query, parameters).fetchall()
+
+            return [
+                {
+                    "id": row["id"],
+                    "timestamp": row["timestamp"],
+                    "level": row["level"],
+                    "exercise_type": row["exercise_type"],
+                    "target_answer": row["target_answer"],
+                    "submitted_answer": row["submitted_answer"],
+                    "is_correct": bool(row["is_correct"]),
+                    "response_time_sec": row["response_time_sec"],
+                    "replay_count": row["replay_count"],
+                }
+                for row in rows
+            ]
+
+    def get_ear_training_analytics(
+        self,
+        player_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        player_id = self._resolve_player_id(player_id)
+
+        with self._get_connection() as conn:
+            summary = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(is_correct) AS correct,
+                    AVG(response_time_sec) AS avg_speed,
+                    AVG(replay_count) AS avg_replays
+                FROM ear_training_attempts
+                WHERE player_id = ?
+                """,
+                (player_id,),
+            ).fetchone()
+
+            exercise_rows = conn.execute(
+                """
+                SELECT
+                    exercise_type,
+                    COUNT(*) AS attempts,
+                    SUM(is_correct) AS correct
+                FROM ear_training_attempts
+                WHERE player_id = ?
+                GROUP BY exercise_type
+                """,
+                (player_id,),
+            ).fetchall()
+
+            level_rows = conn.execute(
+                """
+                SELECT
+                    level,
+                    COUNT(*) AS attempts,
+                    SUM(is_correct) AS correct
+                FROM ear_training_attempts
+                WHERE player_id = ?
+                GROUP BY level
+                ORDER BY level
+                """,
+                (player_id,),
+            ).fetchall()
+
+            total = summary["total"] or 0
+            correct = summary["correct"] or 0
+
+            accuracy = (
+                correct / total * 100.0
+                if total > 0
+                else 0.0
+            )
+
+            def build_breakdown(rows: list) -> Dict[str, Any]:
+                return {
+                    str(row[0]): {
+                        "attempts": row["attempts"],
+                        "correct": row["correct"] or 0,
+                        "accuracy_percentage": round(
+                            (row["correct"] or 0) / row["attempts"] * 100.0,
+                            1,
+                        ),
+                    }
+                    for row in rows
+                }
+
+            return {
+                "total_attempts": total,
+                "correct_attempts": correct,
+                "accuracy_percentage": round(accuracy, 1),
+                "avg_response_speed_sec": round(
+                    summary["avg_speed"] or 0.0, 2
+                ),
+                "avg_replay_count": round(
+                    summary["avg_replays"] or 0.0, 2
+                ),
+                "exercise_breakdown": build_breakdown(exercise_rows),
+                "level_breakdown": build_breakdown(level_rows),
+            }
+
+    # ============================================================
     # BADGE UNLOCKS
     # ============================================================
 
@@ -1034,6 +1445,25 @@ class DatabaseManager:
             conn.execute(
                 "DELETE FROM practice_attempts WHERE player_id = ?",
                 (player_id,),
+            )
+
+            conn.execute(
+                "DELETE FROM ear_training_attempts WHERE player_id = ?",
+                (player_id,),
+            )
+
+            conn.execute(
+                """
+                UPDATE ear_training_progress
+                SET current_level = 1,
+                    unlocked_level = 1,
+                    updated_at = ?
+                WHERE player_id = ?
+                """,
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    player_id,
+                ),
             )
 
             conn.execute(

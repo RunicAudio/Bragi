@@ -29,6 +29,9 @@ NATURAL_NOTE_PITCH_CLASSES = {
     "B": 11,
 }
 
+PIANO_MIN_MIDI = 21   # A0
+PIANO_MAX_MIDI = 108  # C8
+PIANO_KEY_COUNT = 88
 
 class MusicTheory:
     """Static utility methods for pitch classes and frequency conversion."""
@@ -91,6 +94,23 @@ class MusicTheory:
         )
 
         return round(midi_num)
+
+    @staticmethod
+    def midi_number_to_frequency(midi_number: int) -> float:
+        """
+        Convert a MIDI note number into its equal-tempered frequency.
+
+        Uses A4 = 440 Hz as the reference.
+        """
+        if (
+            not isinstance(midi_number, int)
+            or isinstance(midi_number, bool)
+        ):
+            raise ValueError("MIDI number must be an integer.")
+
+        return MusicTheory.A4_FREQ * (
+            2 ** ((midi_number - MusicTheory.A4_MIDI) / 12)
+        )
 
     @staticmethod
     def midi_number_to_note_name(

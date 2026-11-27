@@ -2,7 +2,13 @@ import math
 
 import pytest
 
-from domain.music_theory import CHROMATIC_SHARPS, MusicTheory
+from domain.music_theory import (
+    CHROMATIC_SHARPS,
+    PIANO_MIN_MIDI,
+    PIANO_MAX_MIDI,
+    PIANO_KEY_COUNT,
+    MusicTheory,
+)
 
 
 class TestNoteToPitchClass:
@@ -190,3 +196,38 @@ def test_frequency_conversion_supports_flat_notation():
     assert note == "Db"
     assert pitch_class == 1
     assert abs(cents) < 2.0
+
+class TestPianoMidiFoundation:
+
+    def test_piano_range_constants(self):
+        assert PIANO_MIN_MIDI == 21
+        assert PIANO_MAX_MIDI == 108
+        assert PIANO_MAX_MIDI - PIANO_MIN_MIDI + 1 == PIANO_KEY_COUNT
+
+    def test_piano_range_boundary_note_names(self):
+        assert MusicTheory.midi_number_to_note_name(PIANO_MIN_MIDI) == "A0"
+        assert MusicTheory.midi_number_to_note_name(PIANO_MAX_MIDI) == "C8"
+
+    @pytest.mark.parametrize(
+        "midi_number, expected_frequency",
+        [
+            (21, 27.5),
+            (69, 440.0),
+            (108, 4186.009),
+        ],
+    )
+    def test_midi_to_frequency(self, midi_number, expected_frequency):
+        assert MusicTheory.midi_number_to_frequency(
+            midi_number
+        ) == pytest.approx(expected_frequency, rel=0.00001)
+
+    def test_midi_frequency_round_trip(self):
+        for midi_number in range(PIANO_MIN_MIDI, PIANO_MAX_MIDI + 1):
+            frequency = MusicTheory.midi_number_to_frequency(midi_number)
+
+            assert MusicTheory.frequency_to_midi_number(frequency) == midi_number
+
+    @pytest.mark.parametrize("invalid", [True, False, 60.5, "60", None])
+    def test_midi_to_frequency_rejects_invalid_input(self, invalid):
+        with pytest.raises(ValueError):
+            MusicTheory.midi_number_to_frequency(invalid)
