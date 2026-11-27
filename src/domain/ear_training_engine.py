@@ -5,6 +5,7 @@ Core data structures and curriculum definitions for Ear Training.
 
 This module is independent of the UI and audio playback systems.
 """
+import re
 import random
 
 from dataclasses import dataclass
@@ -519,3 +520,206 @@ class EarTrainingQuestionGenerator:
             chord_quality=quality,
             chord_root=root_name,
         )
+
+# ---------------------------------------------------------------------------
+# Answer validation
+# ---------------------------------------------------------------------------
+
+class EarTrainingAnswerValidator:
+    """Validates submitted answers against generated Ear Training questions."""
+
+    INTERVAL_ALIASES = {
+        "p1": "perfect unison",
+        "m2": "minor second",
+        "b2": "minor second",
+        "maj2": "major second",
+        "m3": "minor third",
+        "b3": "minor third",
+        "maj3": "major third",
+        "p4": "perfect fourth",
+        "a4": "tritone",
+        "d5": "tritone",
+        "tt": "tritone",
+        "p5": "perfect fifth",
+        "m6": "minor sixth",
+        "b6": "minor sixth",
+        "maj6": "major sixth",
+        "m7": "minor seventh",
+        "b7": "minor seventh",
+        "maj7": "major seventh",
+        "p8": "perfect octave",
+    }
+
+    CHORD_ALIASES = {
+        "maj": "major",
+        "major triad": "major",
+        "min": "minor",
+        "minor triad": "minor",
+        "dim": "diminished",
+        "diminished triad": "diminished",
+        "sus": "sus4",
+        "suspended fourth": "sus4",
+        "suspended second": "sus2",
+        "dom7": "dominant 7th",
+        "dominant seventh": "dominant 7th",
+        "7": "dominant 7th",
+        "maj7": "major 7th",
+        "major seventh": "major 7th",
+        "min7": "minor 7th",
+        "minor seventh": "minor 7th",
+    }
+
+    NOTE_PATTERN = re.compile(
+        r"^([A-Ga-g](?:##|bb|[#bx♯♭𝄪𝄫]|)?)(-?\d+)?$"
+    )
+
+    @staticmethod
+    def _normalize_text(value: str) -> str:
+        """Normalize whitespace and capitalization."""
+
+        return " ".join(value.strip().lower().split())
+
+    @classmethod
+    def _parse_note_midi(cls, value: str) -> Optional[int]:
+        """Convert a written note with octave into its exact MIDI number."""
+
+        match = cls.NOTE_PATTERN.fullmatch(value.strip())
+
+        if match is None or match.group(2) is None:
+            return None
+
+        from domain.note_spelling import parse_note
+
+        try:
+            spelled_note = parse_note(match.group(1))
+            octave = int(match.group(2))
+        except (TypeError, ValueError):
+            return None
+
+        natural_pitch = {
+            "C": 0,
+            "D": 2,
+            "E": 4,
+            "F": 5,
+            "G": 7,
+            "A": 9,
+            "B": 11,
+        }
+
+        midi_number = (
+            (octave + 1) * 12
+            + natural_pitch[spelled_note.letter]
+            + spelled_note.accidental
+        )
+
+        if not 21 <= midi_number <= 108:
+            return None
+
+        return midi_number
+
+    @classmethod
+    def _parse_pitch_class(cls, value: str) -> Optional[int]:
+        """Convert a written note into a pitch class."""
+
+        from domain.note_spelling import parse_note
+
+        note_name = value.strip()
+
+        # Accept either a pitch-class name or a note with an octave.
+        match = cls.NOTE_PATTERN.fullmatch(note_name)
+
+        if match is None:
+            return None
+
+        try:
+            return parse_note(match.group(1)).pitch_class
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _normalize_interval(cls, value: str) -> str:
+        """Resolve interval names, abbreviations, and aliases."""
+
+        normalized = cls._normalize_text(value)
+
+        if normalized in cls.INTERVAL_ALIASES:
+            return cls.INTERVAL_ALIASES[normalized]
+
+        for interval in INTERVAL_CATALOGUE.values():
+            accepted_names = (
+                interval.name,
+                interval.interval_id.replace("_", " "),
+                *interval.aliases,
+            )
+
+            if normalized in {
+                cls._normalize_text(name)
+                for name in accepted_names
+            }:
+                return cls._normalize_text(interval.name)
+
+        return normalized
+
+    @classmethod
+    def _normalize_chord_quality(cls, value: str) -> str:
+        """Resolve common chord-quality naming variations."""
+
+        normalized = cls._normalize_text(value)
+
+        return cls.CHORD_ALIASES.get(normalized, normalized)
+
+    @classmethod
+    def validate(
+        cls,
+        question: EarTrainingQuestion,
+        submitted_answer: str,
+    ) -> bool:
+        """Return whether the submitted answer correctly identifies the target."""
+
+        if not isinstance(question, EarTrainingQuestion):
+            raise TypeError("question must be an EarTrainingQuestion")
+
+        if not isinstance(submitted_answer, str):
+            return False
+
+        answer = submitted_answer.strip()
+
+        if not answer:
+            return False
+
+        if question.exercise_type == ExerciseType.SINGLE_NOTE:
+            if question.level == EarTrainingLevel.FOUNDATIONS:
+                submitted_pc = cls._parse_pitch_class(answer)
+                target_pc = question.midi_notes[0] % 12
+
+                return submitted_pc == target_pc
+
+            submitted_midi = cls._parse_note_midi(answer)
+
+            return submitted_midi == question.midi_notes[0]
+
+        if question.exercise_type in (
+            ExerciseType.MELODIC_INTERVAL,
+            ExerciseType.HARMONIC_INTERVAL,
+            ExerciseType.INTERVAL_IDENTIFICATION,
+            ExerciseType.COMPOUND_INTERVAL,
+        ):
+            submitted_interval = cls._normalize_interval(answer)
+            target_interval = cls._normalize_interval(
+                question.target_answer
+            )
+
+            return submitted_interval == target_interval
+
+        if question.exercise_type in (
+            ExerciseType.CHORD_QUALITY,
+            ExerciseType.CHORD_IDENTIFICATION,
+        ):
+            submitted_quality = cls._normalize_chord_quality(answer)
+            target_quality = cls._normalize_chord_quality(
+                question.target_answer
+            )
+
+            return submitted_quality == target_quality
+
+        return False
